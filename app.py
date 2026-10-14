@@ -14,13 +14,18 @@ How it works:
 * While recording, each released note is added to `recording` as
   (start, midi, held, instrument). Pressing Stop turns it into `take`, the list
   every export is built from. If nothing was played, the previous take is kept.
+* Export .mid and Sheet music .ly come from notation.py, assuming the take was
+  played at BPM.
 """
+import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 
 import pygame
 
+import notation
 import synth
 
 HERE = Path(__file__).resolve().parent
@@ -30,6 +35,8 @@ OUT = HERE / "recordings"
 # (it costs memory: 8 s x 13 notes is ~4.5 MB per instrument).
 MAX_HOLD = 8.0
 LOW_NOTE = 60  # The leftmost key when the app starts. MIDI 60 = middle C (C4).
+# ponytail: fixed tempo, no metronome. Exports .mid and .ly line up with bars only if you play at this speed.
+BPM = 100
 LOWEST, HIGHEST = 24, 84  # How far Z / X can shift the leftmost key: C1 to C6 (so the top key goes up to C7).
 
 # Computer keyboard -> half steps above the leftmost key. Most music apps use this layout:
@@ -188,6 +195,8 @@ def main():
     action_buttons = {a: pygame.Rect(KEYS_X + n * 128, KEYS_Y + 220, 120, 32) for n, a in enumerate(actions)}
     action_buttons["down"] = pygame.Rect(KEYS_X, KEYS_Y + 258, 120, 24)  # Under Record
     action_buttons["up"] = pygame.Rect(KEYS_X + 128, KEYS_Y + 258, 120, 24)  # Under Play take
+    action_buttons["midi"] = pygame.Rect(KEYS_X + 2 * 128, KEYS_Y + 258, 120, 24)  # Under Save .wav
+    action_buttons["lily"] = pygame.Rect(KEYS_X + 3 * 128, KEYS_Y + 258, 120, 24)  # Under Export .py
     action_buttons["trim"] = pygame.Rect(KEYS_X + 4 * 128, KEYS_Y + 258, 120, 24)  # Under Export .ts
     trim = True  # Start the first note at 0 s when playing back or exporting.
 
@@ -228,6 +237,22 @@ def main():
         if a == "wav":
             path = OUT / f"{name}.wav"
             synth.save_wav(path, synth.render(notes))
+        elif a == "midi":
+            path = OUT / f"{name}.mid"
+            path.write_bytes(notation.midi_bytes(notes, BPM))
+        elif a == "lily":
+            path = OUT / f"{name}.ly"
+            path.write_text(notation.lilypond(notes, BPM, name))
+            if not shutil.which("lilypond"):
+                status = f"Saved {path.relative_to(HERE)}. Install LilyPond (brew install lilypond) to get a PDF."
+                return
+            # LilyPond takes a second or two to engrave. -o names the PDF after the .ly.
+            done = subprocess.run(["lilypond", "-o", str(path.with_suffix("")), str(path)], capture_output=True, text=True)
+            if done.returncode:
+                status = "LilyPond failed: " + done.stderr.strip().splitlines()[-1]
+                return
+            status = f"Saved {path.relative_to(HERE)} and its .pdf"
+            return
         elif a == "python":
             path = OUT / f"{name.replace('-', '_')}.py"  # Underscores so it can be imported.
             export_python(notes, path)
@@ -308,6 +333,8 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
         "trim": f"Trim start: {'on' if trim else 'off'}",
         "down": "Octave down (Z)",
         "up": "Octave up (X)",
+        "midi": "Export .mid",
+        "lily": "Sheet music .ly",
     }
     for a, r in action_buttons.items():
         button(screen, small if r.height < 32 else font, r, labels[a], active=(a == "record" and rec_start is not None) or (a == "trim" and trim), red=a == "record")

@@ -6,6 +6,8 @@ Play notes with the mouse or keyboard, record them, and then:
 - **Save .wav**: a normal audio file, for example for `weird-austin/src/main/resources/audio/`.
 - **Export .py**: a Python file holding the note list. Run it to rebuild the WAV, edit the notes, or paste them into `gen_audio.py`.
 - **Export .ts**: a TypeScript module that builds the same sound in memory, like `sound-samples.ts`.
+- **Export .mid**: a standard MIDI file for MuseScore, GarageBand, Logic, or a game engine.
+- **Sheet music .ly**: a LilyPond score (plain text), engraved as a PDF if LilyPond is installed.
 
 Every sound is made from math in `synth.py`. There are no audio sample files. So what you play, the WAV, and the exported code all sound the same.
 
@@ -13,6 +15,7 @@ Every sound is made from math in `synth.py`. There are no audio sample files. So
 sound-maker/
   app.py            the window: piano, instrument grid, record and export
   synth.py          the instruments and the song renderer (no UI, so other scripts can import it)
+  notation.py       MIDI and LilyPond (sheet music) exports (no UI either)
   ts/instruments.ts the same instruments in TypeScript, used by .ts exports
   requirements.txt  the Python packages it needs (numpy, pygame)
   recordings/       where saves and exports go (created on first save, ignored by git)
@@ -67,6 +70,7 @@ python app.py
 | See installed packages | `pip list` |
 | Start the venv over (broken or new Python version) | `rm -rf .venv` then repeat steps 2–4 |
 | Self-check the instruments | `python synth.py` (prints each pitch and `ok`) |
+| Self-check the MIDI / sheet music exports | `python notation.py` (prints `ok`) |
 | Try code interactively | `python` then `>>> import synth` (`exit()` to quit) |
 
 > You don't need tkinter. Your pyenv Pythons weren't built with it, which is why this app
@@ -102,7 +106,8 @@ python app.py
 - **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
 - **Play take** plays the recording back.
 - **Trim start** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
-- **Save .wav / Export .py / Export .ts** write to `recordings/take-<date>-<time>.*`.
+- **Save .wav / Export .py / Export .ts / Export .mid / Sheet music .ly** write to `recordings/take-<date>-<time>.*`.
+- **Tempo:** MIDI and sheet music need beats, not seconds, so they assume you played at `BPM` (100, set in `app.py`). Play along with a metronome at that speed and the notes land on the beats and bars.
 
 The recording is just a list of notes:
 
@@ -172,6 +177,30 @@ The bytes are a complete 16-bit mono WAV, the same format as `pcm()` in `sound-s
 In a browser you can play them with `new Audio(URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }))).play()`.
 Recent Node can run `.ts` files directly (`node file.ts`). In that case write the import as `'./instruments.ts'`.
 
+### d) MIDI (`.mid`)
+
+Double-click it to open it in MuseScore (free, [musescore.org](https://musescore.org)), which shows it as sheet music. GarageBand, Logic and most game engines also open it.
+The MIDI file keeps your exact timing, so the program you open it in rounds the notes to beats itself. Each instrument gets its own track and its General MIDI sound, and snare and cymbals go on the drum channel. They'll sound like that program's instruments, not like sound-maker's.
+
+### e) Sheet music (`.ly` and `.pdf`)
+
+`.ly` is [LilyPond](https://lilypond.org)'s text format for sheet music. With LilyPond installed (`brew install lilypond`), the button also writes the `.pdf`. Otherwise run `lilypond take-....ly` later.
+
+```lilypond
+\new Staff \with { instrumentName = "Cello" } { \time 4/4 \clef "bass"
+a4.~ a16 r16 a,2~ |
+a,1 |
+}
+```
+
+`c'` is middle C, `cis` is C#, `'` and `,` move up and down an octave, the number is the length (4 = quarter, 8. = dotted eighth), `~` ties, `r` is a rest, and `|` is a barline. You can fix notes in the text and run `lilypond` again.
+
+How the take becomes notation (in `notation.py`):
+- Note starts and lengths snap to the nearest 16th note at `BPM`, in 4/4 time.
+- One staff per instrument, in the order they first play, with that instrument's clef. Piano, organ and harp get two staves, and notes move between them automatically.
+- Notes that start together become a chord. A note still sounding when the next one starts is cut short, so each staff is one line of music.
+- Everything is at concert pitch (clarinet, trumpet, horn and sax parts aren't transposed) and spelled with sharps.
+
 ---
 
 ## 4. How the sounds are made (for tweaking)
@@ -201,10 +230,11 @@ Vocabulary:
 - **Vibrato:** a small, steady wobble in pitch (about 5 times a second).
 
 **Adding an instrument:** write `def kazoo(freq, seconds): ...` in `synth.py` (often one line using `_partials`) and add it to a family in `FAMILIES`.
-A button appears in that family's row automatically. A row fits 5 buttons. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
+A button appears in that family's row automatically. A row fits 5 buttons.
+Also give it a General MIDI program and a clef in `MELODIC` in `notation.py`. `python notation.py` fails until you do. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
 Run `python synth.py` after any change to check the instruments are still in tune and not too loud.
 
-**Other knobs:** `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
+**Other knobs:** `BPM` in `app.py` sets the tempo for MIDI and sheet music. `STEPS_PER_BEAT` in `notation.py` sets the grid (4 = 16th notes). `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
 
 ---
 
@@ -213,4 +243,5 @@ Run `python synth.py` after any change to check the instruments are still in tun
 - 13 keys are on screen at a time. Use Z / X to reach other octaves.
 - Each note can sound for at most 8 s (`MAX_HOLD` in `app.py`).
 - The guitar can be up to ~10 cents off pitch on high notes. You'd only notice next to another instrument.
+- Sheet music is only as tidy as the playing: there's no metronome in the app yet, triplets and swing don't fit a 16th-note grid, and overlapping notes on one instrument get cut short. The WAV, `.py` and `.ts` exports keep the exact timing.
 - These are synthesized sounds, not recordings of real instruments. Real-instrument sounds would need SoundFont playback (for example fluidsynth). That's a bigger change, and code exports would no longer match exactly.
