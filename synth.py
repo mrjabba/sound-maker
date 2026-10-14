@@ -42,6 +42,21 @@ def _attack(t, seconds):
     return np.minimum(1.0, t / seconds)
 
 
+def _partials(freq, seconds, partials, attack, vibrato=0.0, rate=5.0, decay=0.0):
+    """The recipe most instruments share: add up sine waves at freq * ratio, each at its
+    level, with a vibrato that fades in over 0.4 s and an optional fade-out (decay per
+    second). Dividing by the sum of the levels keeps the peak at or below 1."""
+    t = _t(seconds)
+    phase = np.cumsum(freq * (1 + vibrato * np.minimum(1, t / 0.4) * np.sin(2 * np.pi * rate * t))) / SR
+    out = sum(level * np.sin(2 * np.pi * ratio * phase) for ratio, level in partials)
+    return _attack(t, attack) * np.exp(-decay * t) * out / sum(level for _, level in partials)
+
+
+def _harmonics(*levels):
+    """Levels for harmonics 1, 2, 3... -> (ratio, level) pairs for _partials."""
+    return list(enumerate(levels, 1))
+
+
 # ---------------------------------------------------------------- instruments
 # Every instrument builds its tone by adding up sine waves (harmonics) or by
 # shaping noise, then multiplies by an envelope (the volume over time).
@@ -74,13 +89,14 @@ def organ(freq, seconds):
     return _attack(t, 0.005) * leslie * out / 2.05
 
 
-def guitar(freq, seconds):
+def _pluck(freq, seconds, loss, noise):
     """A plucked string using the Karplus-Strong algorithm.
 
     It starts with one period of random noise, which is the pluck. Then it plays that
     period over and over, and each time through it averages each sample with its
     neighbour. The averaging removes the harsh high frequencies first, so a noisy burst
     turns into a mellow tone that dies away, the way a real string does.
+    loss (just under 1) sets how long it rings, and noise how bright the pluck is.
     """
     n = int(seconds * SR)
     # Averaging two neighbouring samples delays the signal by half a sample, so take
@@ -93,17 +109,27 @@ def guitar(freq, seconds):
     # The pluck: the string pulled into a triangle shape (which gives a strong fundamental)
     # plus noise (which gives the bright "pick" sound).
     shape = 1 - 2 * np.abs(np.linspace(-1, 1, period))
-    burst = 0.7 * shape + 0.3 * rng.uniform(-1, 1, period)
+    burst = (1 - noise) * shape + noise * rng.uniform(-1, 1, period)
     out[:period] = burst - burst.mean()   # Center it on 0. Averaging never removes an offset, so it would stay forever.
     # Fill in the samples one period-sized block at a time. This uses
-    # y[i] = 0.996 * (y[i - period] + y[i - period - 1]) / 2
+    # y[i] = loss * (y[i - period] + y[i - period - 1]) / 2
     for start in range(period, n + period, period):
         prev = out[start - period:start]
         before = np.concatenate(([out[start - period - 1] if start > period else 0.0], prev[:-1]))
-        block = 0.996 * 0.5 * (prev + before)   # 0.996 = how quickly the string loses energy.
+        block = loss * 0.5 * (prev + before)
         end = min(start + period, len(out))
         out[start:end] = block[: end - start]
-    return out[:n] / 0.92
+    return out[:n] / np.abs(out[:period]).max()   # The pluck is the loudest moment.
+
+
+def guitar(freq, seconds):
+    """An acoustic guitar string: a bright pick that dies away fairly quickly."""
+    return _pluck(freq, seconds, loss=0.996, noise=0.3)
+
+
+def harp(freq, seconds):
+    """A harp string: plucked with a finger, so softer than a pick, and it rings longer."""
+    return _pluck(freq, seconds, loss=0.998, noise=0.1)
 
 
 def trumpet(freq, seconds):
@@ -132,8 +158,105 @@ def flute(freq, seconds):
     return _attack(t, 0.08) * (tone + breathiness * breath) / 1.3
 
 
-# The app shows instruments in this order. To add one, write a function above and add it here.
-INSTRUMENTS = {"piano": piano, "guitar": guitar, "trumpet": trumpet, "flute": flute, "organ": organ}
+# Woodwinds and brass. Each is a mix of harmonics: clarinet has almost only the odd
+# ones (a hollow sound), the reeds have strong upper ones (nasal, buzzy), and the low
+# brass have few (round, dark).
+def oboe(freq, seconds):
+    """A double reed: bright and nasal, with strong upper harmonics."""
+    return _partials(freq, seconds, _harmonics(1, 0.9, 0.8, 0.6, 0.45, 0.3, 0.2, 0.15), 0.04, 0.005, 5)
+
+
+def clarinet(freq, seconds):
+    """A single reed in a cylinder: mostly odd harmonics, which sounds hollow."""
+    return _partials(freq, seconds, _harmonics(1, 0.05, 0.45, 0.04, 0.25, 0.03, 0.12, 0, 0.06), 0.04, 0.002, 5)
+
+
+def bassoon(freq, seconds):
+    """The oboe's big cousin: reedy but darker, with fewer upper harmonics."""
+    return _partials(freq, seconds, _harmonics(1, 0.8, 0.6, 0.4, 0.25, 0.12, 0.06), 0.05, 0.003, 5)
+
+
+def saxophone(freq, seconds):
+    """A reed in a cone: lots of harmonics, so it's buzzy, with a wide vibrato."""
+    return _partials(freq, seconds, _harmonics(1, 0.8, 0.65, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1), 0.03, 0.006, 5.5)
+
+
+def french_horn(freq, seconds):
+    """Mellow brass: few harmonics and a soft attack."""
+    return _partials(freq, seconds, _harmonics(1, 0.5, 0.25, 0.12, 0.06), 0.06, 0.002, 5)
+
+
+def trombone(freq, seconds):
+    """Brass between the horn and the trumpet in brightness."""
+    return _partials(freq, seconds, _harmonics(1, 0.7, 0.5, 0.35, 0.25, 0.15, 0.1), 0.05, 0.002, 5)
+
+
+def tuba(freq, seconds):
+    """Low, round brass: almost just the fundamental and the first few harmonics."""
+    return _partials(freq, seconds, _harmonics(1, 0.45, 0.2, 0.08), 0.06)
+
+
+# Bowed strings: a sawtooth (harmonic k at level 1/k) is what a bow makes a string do.
+# The bigger the instrument, the faster the harmonics fall off, the slower the bow
+# gets going, and the slower the vibrato.
+def violin(freq, seconds):
+    return _partials(freq, seconds, [(k, k**-1.0) for k in range(1, 13)], 0.08, 0.007, 5.5)
+
+
+def viola(freq, seconds):
+    return _partials(freq, seconds, [(k, k**-1.2) for k in range(1, 11)], 0.09, 0.006, 5.2)
+
+
+def cello(freq, seconds):
+    return _partials(freq, seconds, [(k, k**-1.3) for k in range(1, 11)], 0.1, 0.006, 5)
+
+
+def double_bass(freq, seconds):
+    return _partials(freq, seconds, [(k, k**-1.5) for k in range(1, 9)], 0.12, 0.004, 4.5)
+
+
+# Percussion. Drums and bars don't vibrate in whole-number harmonics, so their
+# ratios are odd numbers like 1.5 and 3.93. They're struck, so they all fade away.
+def timpani(freq, seconds):
+    """A kettle drum: a tuned membrane with a booming fundamental."""
+    return _partials(freq, seconds, [(1, 1), (1.5, 0.5), (1.98, 0.3), (2.44, 0.15)], 0.003, decay=1.8)
+
+
+def xylophone(freq, seconds):
+    """A struck wooden bar: a short bright 'tock' (overtones at 3.93x and 9.36x)."""
+    return _partials(freq, seconds, [(1, 1), (3.93, 0.35), (9.36, 0.1)], 0.001, decay=7)
+
+
+def snare_drum(freq, seconds):
+    """A burst of noise (the snare wires) over a quick thump (the drum head).
+    The key you press tunes the thump."""
+    t = _t(seconds)
+    rng = np.random.default_rng(int(freq))
+    rattle = rng.uniform(-1, 1, len(t)) * np.exp(-t * 18)
+    thump = np.sin(2 * np.pi * freq * t) * np.exp(-t * 30)
+    return _attack(t, 0.001) * (0.7 * rattle + 0.5 * thump) / 1.15
+
+
+def cymbals(freq, seconds):
+    """A crash: high-pitched noise that rings for a while. Higher keys die away faster."""
+    t = _t(seconds)
+    rng = np.random.default_rng(int(freq))
+    noise = rng.uniform(-1, 1, len(t))
+    hiss = noise - np.convolve(noise, np.ones(4) / 4, mode="same")  # Noise minus its smoothed self = only the highs.
+    return _attack(t, 0.002) * np.exp(-t * freq / 300) * hiss / 1.35
+
+
+# The app shows one row of buttons per family, in this order. To add an instrument,
+# write a function above and add it to a family.
+FAMILIES = {
+    "Keys & plucked": {"piano": piano, "organ": organ, "guitar": guitar, "harp": harp},
+    "Strings": {"violin": violin, "viola": viola, "cello": cello, "double_bass": double_bass},
+    "Woodwinds": {"flute": flute, "oboe": oboe, "clarinet": clarinet, "bassoon": bassoon, "saxophone": saxophone},
+    "Brass": {"trumpet": trumpet, "french_horn": french_horn, "trombone": trombone, "tuba": tuba},
+    "Percussion": {"timpani": timpani, "snare_drum": snare_drum, "cymbals": cymbals, "xylophone": xylophone},
+}
+INSTRUMENTS = {name: fn for family in FAMILIES.values() for name, fn in family.items()}
+UNPITCHED = {"snare_drum", "cymbals"}  # Noise-based, so the self-check skips their pitch test.
 
 
 # ---------------------------------------------------------------- songs
@@ -182,8 +305,8 @@ if __name__ == "__main__":
         spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x))))
         pitch = np.argmax(spectrum) * SR / len(x)
         peak = np.abs(x).max()
-        print(f"{name:8s} pitch {pitch:6.1f} Hz   peak {peak:.2f}")
-        assert abs(pitch - 440) / 440 < 0.015, f"{name} is out of tune"
+        print(f"{name:12s} pitch {pitch:6.1f} Hz   peak {peak:.2f}")
+        assert name in UNPITCHED or abs(pitch - 440) / 440 < 0.015, f"{name} is out of tune"
         assert 0.5 < peak <= 1.05, f"{name} volume is off"
     song = render([(0.0, 60, 0.5, "piano"), (0.25, 64, 1.0, "organ")])
     assert len(song) == int((1.25 + RELEASE) * SR) + 1 and np.abs(song).max() <= 0.99

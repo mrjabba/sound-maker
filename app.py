@@ -5,6 +5,7 @@ a recorder, and export buttons.
 Run:  python app.py
 
 How it works:
+* Instruments come from synth.FAMILIES, one row of buttons per family.
 * pygame opens the window, reads the mouse and keyboard, and plays the sounds.
 * When you choose an instrument, each of its 13 notes is rendered once by synth.py,
   MAX_HOLD seconds long. These are cached in `sounds`.
@@ -45,9 +46,9 @@ def note_name(midi):
     return f"{NAMES[midi % 12]}{midi // 12 - 1}"
 
 # Layout, in pixels.
-W, H = 760, 390
+W, H = 760, 500
 WHITE_W, WHITE_H, BLACK_W, BLACK_H = 80, 200, 50, 125
-KEYS_X, KEYS_Y = (W - 8 * WHITE_W) // 2, 70
+KEYS_X, KEYS_Y = (W - 8 * WHITE_W) // 2, 180
 
 
 # ---------------------------------------------------------------- key geometry
@@ -177,12 +178,17 @@ def main():
             recording.append((start - rec_start, midi, time.time() - start, inst))
 
     # Buttons: (label, rectangle). Labels for some of them change while the app runs.
-    inst_buttons = {name: pygame.Rect(KEYS_X + n * 128, 20, 120, 32) for n, name in enumerate(synth.INSTRUMENTS)}
+    # One row per instrument family, with the family name on the left.
+    inst_buttons = {
+        name: pygame.Rect(KEYS_X + 100 + n * 108, 12 + row * 30, 102, 26)
+        for row, family in enumerate(synth.FAMILIES.values())
+        for n, name in enumerate(family)
+    }
     actions = ["record", "play", "wav", "python", "typescript"]
-    action_buttons = {a: pygame.Rect(KEYS_X + n * 128, 290, 120, 32) for n, a in enumerate(actions)}
-    action_buttons["down"] = pygame.Rect(KEYS_X, 328, 120, 24)  # Under Record
-    action_buttons["up"] = pygame.Rect(KEYS_X + 128, 328, 120, 24)  # Under Play take
-    action_buttons["trim"] = pygame.Rect(KEYS_X + 4 * 128, 328, 120, 24)  # Under Export .ts
+    action_buttons = {a: pygame.Rect(KEYS_X + n * 128, KEYS_Y + 220, 120, 32) for n, a in enumerate(actions)}
+    action_buttons["down"] = pygame.Rect(KEYS_X, KEYS_Y + 258, 120, 24)  # Under Record
+    action_buttons["up"] = pygame.Rect(KEYS_X + 128, KEYS_Y + 258, 120, 24)  # Under Play take
+    action_buttons["trim"] = pygame.Rect(KEYS_X + 4 * 128, KEYS_Y + 258, 120, 24)  # Under Export .ts
     trim = True  # Start the first note at 0 s when playing back or exporting.
 
     def action(a):
@@ -254,10 +260,10 @@ def main():
                     note_on(mouse_key)
                 for name, r in inst_buttons.items():
                     if r.collidepoint(e.pos):
-                        status = f"Loading {name}..."
+                        status = f"Loading {pretty(name)}..."
                         draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, low, status)
                         load(name)
-                        instrument, status = name, f"Instrument: {name}"
+                        instrument, status = name, f"Instrument: {pretty(name)}"
                 for a, r in action_buttons.items():
                     if r.collidepoint(e.pos):
                         action(a)
@@ -273,8 +279,10 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
     screen.fill((34, 36, 42))
     letters = "awsedftgyhujk"
 
+    for row, family in enumerate(synth.FAMILIES):
+        screen.blit(small.render(family, True, (150, 150, 160)), (KEYS_X, 18 + row * 30))
     for name, r in inst_buttons.items():
-        button(screen, font, r, name.title(), active=name == instrument)
+        button(screen, small, r, pretty(name), active=name == instrument)
 
     # White keys first, then black keys on top. A pressed key is drawn highlighted.
     for black in (False, True):
@@ -304,8 +312,13 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
     for a, r in action_buttons.items():
         button(screen, small if r.height < 32 else font, r, labels[a], active=(a == "record" and rec_start is not None) or (a == "trim" and trim), red=a == "record")
 
-    screen.blit(small.render(status, True, (200, 200, 200)), (KEYS_X, 364))
+    screen.blit(small.render(status, True, (200, 200, 200)), (KEYS_X, KEYS_Y + 294))
     pygame.display.flip()
+
+
+def pretty(name):
+    """"french_horn" -> "French Horn"."""
+    return name.replace("_", " ").title()
 
 
 def button(screen, font, rect, text, active=False, red=False):

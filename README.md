@@ -11,7 +11,7 @@ Every sound is made from math in `synth.py`. There are no audio sample files. So
 
 ```
 sound-maker/
-  app.py            the window: piano, instrument buttons, record and export
+  app.py            the window: piano, instrument grid, record and export
   synth.py          the instruments and the song renderer (no UI, so other scripts can import it)
   ts/instruments.ts the same instruments in TypeScript, used by .ts exports
   requirements.txt  the Python packages it needs (numpy, pygame)
@@ -87,8 +87,18 @@ python app.py
     A S D F G H J K      C  D  E  F  G  A  B  C
   ```
 - **Octaves:** press **Z** / **X**, or click *Octave down* / *Octave up*, to move the keys down or up an octave (from C1–C2 to C6–C7). The labels on the keys show which octave you're in (C4 is middle C). You can change octave while recording, so one take can cover the whole range.
-- **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Piano and guitar die away on their own, like real ones. Trumpet, flute and organ keep sounding as long as you hold the key (up to 8 s).
-- **Instrument buttons:** Piano, Guitar, Trumpet, Flute, Organ. Switching only changes notes you play after that, so one take can mix instruments.
+- **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Struck and plucked instruments (piano, guitar, harp, percussion) die away on their own, like real ones. Blown and bowed ones (woodwinds, brass, strings, organ) keep sounding as long as you hold the key (up to 8 s).
+- **Instrument buttons:** 21 instruments, one row per family:
+
+  | Family | Instruments |
+  |---|---|
+  | Keys & plucked | Piano, Organ, Guitar (acoustic), Harp |
+  | Strings | Violin, Viola, Cello, Double Bass |
+  | Woodwinds | Flute, Oboe, Clarinet, Bassoon, Saxophone |
+  | Brass | Trumpet, French Horn, Trombone, Tuba |
+  | Percussion | Timpani, Snare Drum, Cymbals, Xylophone |
+
+  Switching only changes notes you play after that, so one take can mix instruments. Every key plays every instrument. Use Z / X to move low instruments (tuba, double bass, timpani) into their real range. Snare and cymbals are noise, so the key only changes the drum's thump or how long the crash rings.
 - **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
 - **Play take** plays the recording back.
 - **Trim start** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
@@ -179,14 +189,19 @@ Each instrument in `synth.py` is a short function, `fn(freq, seconds) -> array`:
 | trumpet | sawtooth harmonics that "open up" over 80 ms, plus vibrato | `brightness` (higher = brassier), vibrato depth `0.006` |
 | flute | sine wave plus a little breath noise | `breathiness` |
 | organ | fixed sine "drawbars" plus a Leslie wobble | the `drawbars` list |
+| harp | the guitar's Karplus-Strong with a softer pluck that rings longer | `loss`, `noise` |
+| woodwinds, brass | `_partials()`: a list of harmonic levels, an attack time and vibrato. Clarinet has mostly odd harmonics (hollow), and the low brass have few (round) | the `_harmonics(...)` levels |
+| strings | a sawtooth (harmonic k at 1/k), darker and slower to start on the bigger instruments | the power in `k**-1.3`, the attack |
+| timpani, xylophone | `_partials()` with non-whole-number overtones (1.5x, 3.93x...) and a `decay` | `decay` (bigger = shorter) |
+| snare drum, cymbals | noise with a fast fade. The snare adds a thump at the key's pitch, and the cymbals keep only the high frequencies | the `exp(-t * ...)` fade rates |
 
 Vocabulary:
 - **Harmonics:** extra sine waves at 2×, 3×, 4×... the note's frequency. Their mix gives each instrument its *timbre* (its tone color).
 - **Envelope:** volume over time. A sharp *attack* sounds plucked or struck, and a slow one sounds blown or bowed.
 - **Vibrato:** a small, steady wobble in pitch (about 5 times a second).
 
-**Adding an instrument:** write `def kazoo(freq, seconds): ...` in `synth.py` and add it to `INSTRUMENTS`.
-A button appears in the app automatically. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
+**Adding an instrument:** write `def kazoo(freq, seconds): ...` in `synth.py` (often one line using `_partials`) and add it to a family in `FAMILIES`.
+A button appears in that family's row automatically. A row fits 5 buttons. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
 Run `python synth.py` after any change to check the instruments are still in tune and not too loud.
 
 **Other knobs:** `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
