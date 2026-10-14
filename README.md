@@ -86,6 +86,7 @@ python app.py
      W E   T Y U          C# D#    F# G# A#
     A S D F G H J K      C  D  E  F  G  A  B  C
   ```
+- **Octaves:** press **Z** / **X**, or click *Octave down* / *Octave up*, to move the keys down or up an octave (from C1–C2 to C6–C7). The labels on the keys show which octave you're in (C4 is middle C). You can change octave while recording, so one take can cover the whole range.
 - **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Piano and guitar die away on their own, like real ones. Trumpet, flute and organ keep sounding as long as you hold the key (up to 8 s).
 - **Instrument buttons:** Piano, Guitar, Trumpet, Flute, Organ. Switching only changes notes you play after that, so one take can mix instruments.
 - **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
@@ -188,13 +189,13 @@ Vocabulary:
 A button appears in the app automatically. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
 Run `python synth.py` after any change to check the instruments are still in tune and not too loud.
 
-**Other knobs:** `LOW_NOTE` in `app.py` moves the keyboard by octaves (+12 = one up). `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
+**Other knobs:** `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
 
 ---
 
 ## Known limits
 
-- One octave, no octave-shift key. Change `LOW_NOTE` or ask for octave keys.
+- 13 keys are on screen at a time. Use Z / X to reach other octaves.
 - Each note can sound for at most 8 s (`MAX_HOLD` in `app.py`).
 - The guitar can be up to ~10 cents off pitch on high notes. You'd only notice next to another instrument.
 - These are synthesized sounds, not recordings of real instruments. Real-instrument sounds would need SoundFont playback (for example fluidsynth). That's a bigger change, and code exports would no longer match exactly.

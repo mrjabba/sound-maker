@@ -28,9 +28,10 @@ OUT = HERE / "recordings"
 # ponytail: each note can sound for at most 8 s. Raise this if you hold notes longer
 # (it costs memory: 8 s x 13 notes is ~4.5 MB per instrument).
 MAX_HOLD = 8.0
-LOW_NOTE = 60  # MIDI 60 = middle C (C4). Change it to move the octave up or down (+12 = one octave up).
+LOW_NOTE = 60  # The leftmost key when the app starts. MIDI 60 = middle C (C4).
+LOWEST, HIGHEST = 24, 84  # How far Z / X can shift the leftmost key: C1 to C6 (so the top key goes up to C7).
 
-# Computer keyboard -> half steps above LOW_NOTE. Most music apps use this layout:
+# Computer keyboard -> half steps above the leftmost key. Most music apps use this layout:
 # the home row plays the white keys and the row above plays the black keys.
 #    W E   T Y U
 #   A S D F G H J K
@@ -38,8 +39,13 @@ KEYMAP = {k: i for i, k in enumerate("awsedftgyhujk")}
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "C"]
 BLACK = {1, 3, 6, 8, 10}  # Half steps that are black keys.
 
+
+def note_name(midi):
+    """60 -> "C4", 61 -> "C#4". The octave number goes up by one at each C."""
+    return f"{NAMES[midi % 12]}{midi // 12 - 1}"
+
 # Layout, in pixels.
-W, H = 760, 360
+W, H = 760, 390
 WHITE_W, WHITE_H, BLACK_W, BLACK_H = 80, 200, 50, 125
 KEYS_X, KEYS_Y = (W - 8 * WHITE_W) // 2, 70
 
@@ -80,7 +86,7 @@ def trim_start(take):
 
 def export_python(take, path):
     """Write a Python file that holds the note list. Running it with python writes the WAV."""
-    rows = "\n".join(f"    ({at:.3f}, {midi}, {held:.3f}, {inst!r}),  # {NAMES[midi - LOW_NOTE]}" for at, midi, held, inst in take)
+    rows = "\n".join(f"    ({at:.3f}, {midi}, {held:.3f}, {inst!r}),  # {note_name(midi)}" for at, midi, held, inst in take)
     path.write_text(f'''"""
 Recorded with sound-maker on {datetime.now():%Y-%m-%d %H:%M}.
 
@@ -106,7 +112,7 @@ if __name__ == "__main__":
 def export_typescript(take, path):
     """Write a TypeScript module that plays the take using ts/instruments.ts (copy that file next to it)."""
     rows = "\n".join(
-        f"  {{ at: {at:.3f}, midi: {midi}, held: {held:.3f}, instrument: '{inst}' }}, // {NAMES[midi - LOW_NOTE]}"
+        f"  {{ at: {at:.3f}, midi: {midi}, held: {held:.3f}, instrument: '{inst}' }}, // {note_name(midi)}"
         for at, midi, held, inst in take
     )
     path.write_text(f"""// Recorded with sound-maker on {datetime.now():%Y-%m-%d %H:%M}.
@@ -139,30 +145,33 @@ def main():
     rects = key_rects()
     sounds = {}  # (instrument, midi) -> pygame Sound
     instrument = "piano"
-    held = {}  # midi -> (channel, start time, instrument), for notes currently down
+    low = LOW_NOTE  # MIDI note of the leftmost key. Z / X move it down / up 12 (one octave).
+    held = {}  # key (0-12) -> (midi, channel, start time, instrument), for keys currently down
     take = []  # The last finished recording: (start, midi, held seconds, instrument)
     recording = []  # Notes of the recording in progress. Replaces `take` when you press Stop.
     rec_start = None  # time.time() when recording started, or None when not recording
     status = "Click keys or type A W S E D F T G Y H U J K."
 
     def load(name):
-        """Render all 13 notes of an instrument and cache them as pygame Sounds."""
+        """Render the 13 notes of an instrument in the current octave and cache them as
+        pygame Sounds. Octaves you've already visited are cached, so going back is instant."""
         for i in range(13):
-            midi = LOW_NOTE + i
+            midi = low + i
             if (name, midi) not in sounds:
                 wave = synth.INSTRUMENTS[name](synth.hz(midi), MAX_HOLD) * synth.NOTE_GAIN
                 sounds[name, midi] = pygame.sndarray.make_sound(synth.to_int16(wave))
 
     def note_on(i):
-        midi = LOW_NOTE + i
-        if midi not in held:  # Mouse and keyboard pressing the same key only start it once.
-            held[midi] = (sounds[instrument, midi].play(), time.time(), instrument)
+        if i not in held:  # Mouse and keyboard pressing the same key only start it once.
+            midi = low + i
+            held[i] = (midi, sounds[instrument, midi].play(), time.time(), instrument)
 
     def note_off(i):
-        midi = LOW_NOTE + i
-        if midi not in held:
+        # Held notes are stored by key, along with their midi number. If you change octave
+        # while holding a key, releasing it still stops the note that's actually playing.
+        if i not in held:
             return
-        channel, start, inst = held.pop(midi)
+        midi, channel, start, inst = held.pop(i)
         channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
         if rec_start is not None and start >= rec_start:
             recording.append((start - rec_start, midi, time.time() - start, inst))
@@ -171,11 +180,18 @@ def main():
     inst_buttons = {name: pygame.Rect(KEYS_X + n * 128, 20, 120, 32) for n, name in enumerate(synth.INSTRUMENTS)}
     actions = ["record", "play", "wav", "python", "typescript"]
     action_buttons = {a: pygame.Rect(KEYS_X + n * 128, 290, 120, 32) for n, a in enumerate(actions)}
+    action_buttons["down"] = pygame.Rect(KEYS_X, 328, 120, 24)  # Under Record
+    action_buttons["up"] = pygame.Rect(KEYS_X + 128, 328, 120, 24)  # Under Play take
     action_buttons["trim"] = pygame.Rect(KEYS_X + 4 * 128, 328, 120, 24)  # Under Export .ts
     trim = True  # Start the first note at 0 s when playing back or exporting.
 
     def action(a):
-        nonlocal rec_start, take, recording, status, trim
+        nonlocal rec_start, take, recording, status, trim, low
+        if a in ("down", "up"):
+            low = min(HIGHEST, max(LOWEST, low + (12 if a == "up" else -12)))
+            load(instrument)
+            status = f"Keys now play {note_name(low)} to {note_name(low + 12)}."
+            return
         if a == "trim":
             trim = not trim
             status = "The first note will start at 0 s." if trim else "Keeping the silence before the first note."
@@ -225,6 +241,8 @@ def main():
             # turned on), so holding a key gives one down and one up.
             elif e.type == pygame.KEYDOWN and e.unicode.lower() in KEYMAP:
                 note_on(KEYMAP[e.unicode.lower()])
+            elif e.type == pygame.KEYDOWN and e.unicode.lower() in ("z", "x"):
+                action("down" if e.unicode.lower() == "z" else "up")
             elif e.type == pygame.KEYUP:
                 # e.unicode is not reliable on KEYUP, so use the key's name instead.
                 k = pygame.key.name(e.key)
@@ -237,7 +255,7 @@ def main():
                 for name, r in inst_buttons.items():
                     if r.collidepoint(e.pos):
                         status = f"Loading {name}..."
-                        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status)
+                        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, low, status)
                         load(name)
                         instrument, status = name, f"Instrument: {name}"
                 for a, r in action_buttons.items():
@@ -246,11 +264,11 @@ def main():
             elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and mouse_key is not None:
                 note_off(mouse_key)
                 mouse_key = None
-        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status)
+        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, low, status)
         clock.tick(60)
 
 
-def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status):
+def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, low, status):
     """Redraw the whole window. Called about 60 times a second."""
     screen.fill((34, 36, 42))
     letters = "awsedftgyhujk"
@@ -263,12 +281,12 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
         for i, r in rects.items():
             if (i in BLACK) != black:
                 continue
-            down = LOW_NOTE + i in held
+            down = i in held
             color = (120, 170, 255) if down else ((20, 20, 24) if black else (245, 245, 240))
             pygame.draw.rect(screen, color, r, border_radius=4)
             pygame.draw.rect(screen, (60, 60, 60), r, 1, border_radius=4)
             ink = (200, 200, 200) if black and not down else (40, 40, 40)
-            label = font.render(NAMES[i], True, ink)  # Note name
+            label = font.render(note_name(low + i), True, ink)  # Note name, e.g. C4
             screen.blit(label, label.get_rect(midbottom=(r.centerx, r.bottom - 8)))
             hint = small.render(letters[i].upper(), True, (130, 130, 140))  # Computer key that plays it
             screen.blit(hint, hint.get_rect(midbottom=(r.centerx, r.bottom - 30)))
@@ -280,11 +298,13 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
         "python": "Export .py",
         "typescript": "Export .ts",
         "trim": f"Trim start: {'on' if trim else 'off'}",
+        "down": "Octave down (Z)",
+        "up": "Octave up (X)",
     }
     for a, r in action_buttons.items():
-        button(screen, small if a == "trim" else font, r, labels[a], active=(a == "record" and rec_start is not None) or (a == "trim" and trim), red=a == "record")
+        button(screen, small if r.height < 32 else font, r, labels[a], active=(a == "record" and rec_start is not None) or (a == "trim" and trim), red=a == "record")
 
-    screen.blit(small.render(status, True, (200, 200, 200)), (KEYS_X, 334))
+    screen.blit(small.render(status, True, (200, 200, 200)), (KEYS_X, 364))
     pygame.display.flip()
 
 
