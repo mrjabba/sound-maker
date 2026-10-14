@@ -10,8 +10,9 @@ How it works:
   MAX_HOLD seconds long. These are cached in `sounds`.
 * Pressing a key starts that note playing. Releasing the key fades it out over
   synth.RELEASE. Holding the key longer makes the note longer.
-* While recording, each released note is saved to `take` as
-  (start, midi, held, instrument). Every export is built from that list.
+* While recording, each released note is added to `recording` as
+  (start, midi, held, instrument). Pressing Stop turns it into `take`, the list
+  every export is built from. If nothing was played, the previous take is kept.
 """
 import time
 from datetime import datetime
@@ -68,6 +69,13 @@ def key_at(pos, rects):
 # ---------------------------------------------------------------- exports
 def stamp():
     return datetime.now().strftime("take-%Y%m%d-%H%M%S")
+
+
+def trim_start(take):
+    """Shift every note earlier so the first one starts at 0 s, removing the silence
+    between pressing Record and playing. Takes a take sorted by start time."""
+    first = take[0][0]
+    return [(at - first, midi, held, inst) for at, midi, held, inst in take]
 
 
 def export_python(take, path):
@@ -132,7 +140,8 @@ def main():
     sounds = {}  # (instrument, midi) -> pygame Sound
     instrument = "piano"
     held = {}  # midi -> (channel, start time, instrument), for notes currently down
-    take = []  # The recording: (start, midi, held seconds, instrument)
+    take = []  # The last finished recording: (start, midi, held seconds, instrument)
+    recording = []  # Notes of the recording in progress. Replaces `take` when you press Stop.
     rec_start = None  # time.time() when recording started, or None when not recording
     status = "Click keys or type A W S E D F T G Y H U J K."
 
@@ -150,49 +159,59 @@ def main():
             held[midi] = (sounds[instrument, midi].play(), time.time(), instrument)
 
     def note_off(i):
-        nonlocal take
         midi = LOW_NOTE + i
         if midi not in held:
             return
         channel, start, inst = held.pop(midi)
         channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
         if rec_start is not None and start >= rec_start:
-            take.append((start - rec_start, midi, time.time() - start, inst))
+            recording.append((start - rec_start, midi, time.time() - start, inst))
 
     # Buttons: (label, rectangle). Labels for some of them change while the app runs.
     inst_buttons = {name: pygame.Rect(KEYS_X + n * 128, 20, 120, 32) for n, name in enumerate(synth.INSTRUMENTS)}
     actions = ["record", "play", "wav", "python", "typescript"]
     action_buttons = {a: pygame.Rect(KEYS_X + n * 128, 290, 120, 32) for n, a in enumerate(actions)}
+    action_buttons["trim"] = pygame.Rect(KEYS_X + 4 * 128, 328, 120, 24)  # Under Export .ts
+    trim = True  # Start the first note at 0 s when playing back or exporting.
 
     def action(a):
-        nonlocal rec_start, take, status
+        nonlocal rec_start, take, recording, status, trim
+        if a == "trim":
+            trim = not trim
+            status = "The first note will start at 0 s." if trim else "Keeping the silence before the first note."
+            return
         if a == "record":
             if rec_start is None:
-                take, rec_start = [], time.time()
+                recording, rec_start = [], time.time()
                 status = "Recording... play something, then press Stop."
             else:
                 rec_start = None
-                status = f"Recorded {len(take)} notes."
+                if recording:
+                    take = recording
+                    status = f"Recorded {len(take)} notes."
+                else:  # Record then Stop without playing: you changed your mind, so keep the old take.
+                    status = "Stopped. Nothing was played, so the previous take is kept."
             return
         if not take:
             status = "Nothing recorded yet. Press Record first."
             return
         take.sort()  # Notes are saved when released, so put them back in start order.
+        notes = trim_start(take) if trim else take  # A trimmed copy. The recording itself is unchanged.
         if a == "play":
-            pygame.sndarray.make_sound(synth.to_int16(synth.render(take))).play()
+            pygame.sndarray.make_sound(synth.to_int16(synth.render(notes))).play()
             status = "Playing the take."
             return
         OUT.mkdir(exist_ok=True)
         name = stamp()
         if a == "wav":
             path = OUT / f"{name}.wav"
-            synth.save_wav(path, synth.render(take))
+            synth.save_wav(path, synth.render(notes))
         elif a == "python":
             path = OUT / f"{name.replace('-', '_')}.py"  # Underscores so it can be imported.
-            export_python(take, path)
+            export_python(notes, path)
         else:
             path = OUT / f"{name}.ts"
-            export_typescript(take, path)
+            export_typescript(notes, path)
         status = f"Saved {path.relative_to(HERE)}"
 
     load(instrument)
@@ -218,7 +237,7 @@ def main():
                 for name, r in inst_buttons.items():
                     if r.collidepoint(e.pos):
                         status = f"Loading {name}..."
-                        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, status)
+                        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status)
                         load(name)
                         instrument, status = name, f"Instrument: {name}"
                 for a, r in action_buttons.items():
@@ -227,11 +246,11 @@ def main():
             elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and mouse_key is not None:
                 note_off(mouse_key)
                 mouse_key = None
-        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, status)
+        draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status)
         clock.tick(60)
 
 
-def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, status):
+def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrument, rec_start, trim, status):
     """Redraw the whole window. Called about 60 times a second."""
     screen.fill((34, 36, 42))
     letters = "awsedftgyhujk"
@@ -260,9 +279,10 @@ def draw(screen, font, small, rects, held, inst_buttons, action_buttons, instrum
         "wav": "Save .wav",
         "python": "Export .py",
         "typescript": "Export .ts",
+        "trim": f"Trim start: {'on' if trim else 'off'}",
     }
     for a, r in action_buttons.items():
-        button(screen, font, r, labels[a], active=a == "record" and rec_start is not None, red=True)
+        button(screen, small if a == "trim" else font, r, labels[a], active=(a == "record" and rec_start is not None) or (a == "trim" and trim), red=a == "record")
 
     screen.blit(small.render(status, True, (200, 200, 200)), (KEYS_X, 334))
     pygame.display.flip()

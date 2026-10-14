@@ -88,8 +88,9 @@ python app.py
   ```
 - **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Piano and guitar die away on their own, like real ones. Trumpet, flute and organ keep sounding as long as you hold the key (up to 8 s).
 - **Instrument buttons:** Piano, Guitar, Trumpet, Flute, Organ. Switching only changes notes you play after that, so one take can mix instruments.
-- **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved.
+- **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
 - **Play take** plays the recording back.
+- **Trim start** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
 - **Save .wav / Export .py / Export .ts** write to `recordings/take-<date>-<time>.*`.
 
 The recording is just a list of notes:
