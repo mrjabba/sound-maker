@@ -169,15 +169,15 @@ The current family's hue fills the selected instrument and draws its tab underli
 
 The window is a fixed 1000x720 canvas with absolute pixel boxes (left, top, right, bottom), stacked top to bottom:
 
-1. **Top strip** (64px, Panel): Record, Play, five family tabs, five exports, and Trim at the right edge. Controls are 36px tall at y 14 to 50.
+1. **Top strip** (64px, Panel): Record, Play, Metronome, five family tabs, five exports, and Trim at the right edge. Controls are 36px tall at y 14 to 50.
 2. **Instrument row** (44px): one button per instrument in the current family (122px wide on a 128px pitch), with the octave control (down, range, up) on the right.
 3. **Roll**: fills the space between the instrument row and the keys, inset 16px from each side.
 4. **Keys** (152px tall): 8 white keys across the roll's full width, and 5 black keys (60% of a white key's width, 94px tall) centered on the white-key seams.
-5. **Status bar** (Panel): the hover help or status message on the left, then the readout.
+5. **Status bar** (Panel): the hover help or status message on the left, then the readout, then the tempo control (− / BPM / +) at the right edge.
 
 The outer margin is 16px. Text sits 12px in from a box edge when aligned left or right. Exports are spaced 4px apart. The roll's lanes line up exactly with the keys below them.
 
-**The Fixed Anchor Rule.** Readout segments start at fixed x positions (note at W−400, take at W−290, BPM right-aligned), so ticking numbers never shift the line.
+**The Fixed Anchor Rule.** Readout segments start at fixed x positions (note at W−450, take at W−340), with the tempo control at the right edge, so ticking numbers never shift the line.
 
 ## Elevation & Depth
 
@@ -205,6 +205,12 @@ Flat and quiet. All buttons go through one `button()` helper.
 ### Exports
 WAV, PY, TS, MID (52px) and SCORE (66px). Disabled until there is a finished take, and disabled again while recording. Each format saved from the current take gets a check mark after its label, drawn as lines and centered with the label. The checks stay until the next take.
 
+### Metronome Toggle
+Same anatomy as Trim: a small dot and the label "Metronome". When on, the label is Ink and the dot flashes Ink for 0.1 s on each beat (Dim between beats); when off, the label is Dim and the dot Faint.
+
+### Tempo Control
+In the status bar: two 24x20 buttons drawn as − and + strokes around "100 BPM" (SemiBold 14, Ink). Disabled (Faint strokes) while recording. Recording shows "Count-in N" in the readout during the one-bar count-in.
+
 ### Trim Toggle
 A plain button, not a switch: a small dot (Ink when on, Faint when off) and the label "Trim on" (Ink) or "Trim off" (Dim).
 
@@ -213,7 +219,7 @@ Unselected: Ground fill, Dim label, normal hover. Selected: filled with the fami
 
 ### Piano Roll (signature)
 - Lane surface in Graphite Lane, a Black Lane strip above each black key, and a Grid Line edge where two white keys touch with no black key between them.
-- A beat grid at `BPM` that rises with the bars, so notes played on the beat line up with it. Every fourth line is Bar Line.
+- A beat grid that rises with the bars, in step with the metronome (counted from `s.beat0` at `s.click_bpm`), so notes played on the beat line up with it. Every beat 1 is Bar Line.
 - A bar's top marks when the note started and its bottom when it ended. Both rise at `SPEED` (120 px/s). While a note is held, its bottom stays on the keys.
 - Bars are inset 6px (white) or 4px (black) inside their lane, with a 3px radius and a 2px Black Lane outline. White-key bars are drawn first so black-key bars sit on top.
 - While recording, a 3px Rec Red rule runs along the bottom edge of the roll, just above the keys.

@@ -282,6 +282,18 @@ def render(notes):
     return buf * (0.99 / peak) if peak > 0.99 else buf  # Only turn it down, and only if it would clip.
 
 
+def metronome_bar(bpm, beats=4):
+    """One bar of metronome clicks at bpm: a short high blip on every beat, higher on
+    beat 1 so you can hear where the bar starts. Loop it for a steady click track."""
+    beat = int(SR * 60 / bpm)
+    out = np.zeros(beat * beats)
+    t = _t(0.03)  # Each click lasts 30 ms.
+    for n in range(beats):
+        freq = 2000 if n == 0 else 1500
+        out[n * beat:n * beat + len(t)] = np.sin(2 * np.pi * freq * t) * np.exp(-t * 150) * 0.5
+    return out
+
+
 def to_int16(samples):
     """Convert floats (-1..1) to 16-bit integers, the format WAV files and pygame use."""
     return (np.clip(samples, -1, 1) * 32767).astype(np.int16)
@@ -310,4 +322,6 @@ if __name__ == "__main__":
         assert 0.5 < peak <= 1.05, f"{name} volume is off"
     song = render([(0.0, 60, 0.5, "piano"), (0.25, 64, 1.0, "organ")])
     assert len(song) == int((1.25 + RELEASE) * SR) + 1 and np.abs(song).max() <= 0.99
+    bar = metronome_bar(120)  # 4 beats at 120 bpm = 2 s, with a click at the start of each beat.
+    assert len(bar) == 2 * SR and bar[1] != 0 and bar[SR // 2 + 1] != 0 and bar[SR // 4] == 0
     print("ok")

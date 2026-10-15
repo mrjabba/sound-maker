@@ -18,7 +18,11 @@ How it works:
 * While recording, each released note is added to `s.recording` as
   (start, midi, held, instrument). Pressing Stop turns it into `s.take`, the list
   every export is built from. If nothing was played, the previous take is kept.
-* Export .mid and Score (.ly) come from notation.py, assuming the take was played at BPM.
+* Tempo: s.bpm sets the metronome and the beat grid. Recording always starts with a
+  one-bar count-in, so a take starts on beat 1 and remembers its tempo (s.take_bpm).
+  Export .mid and Score (.ly) come from notation.py at that tempo.
+* The metronome is one bar of clicks (synth.metronome_bar) looped on its own mixer
+  channel, so its timing is exact instead of depending on the frame rate.
 """
 import math
 import shutil
@@ -29,6 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import dearpygui.dearpygui as dpg
+import numpy as np
 import pygame
 
 import notation
@@ -42,8 +47,9 @@ FONTS = HERE / "fonts"
 # (it costs memory: 8 s x 13 notes is ~4.5 MB per instrument).
 MAX_HOLD = 8.0
 LOW_NOTE = 60  # The leftmost key when the app starts. MIDI 60 = middle C (C4).
-# ponytail: fixed tempo, no metronome. Exports .mid and .ly line up with bars only if you play at this speed.
-BPM = 100
+DEFAULT_BPM, MIN_BPM, MAX_BPM, BPM_STEP = 100, 40, 240, 5
+# ponytail: always 4/4. Other time signatures would need this in notation.py too.
+BEATS_PER_BAR = 4
 LOWEST, HIGHEST = 24, 84  # How far the octave buttons can shift the leftmost key: C1 to C6 (the top key reaches C7).
 
 # Computer keyboard -> half steps above the leftmost key. Most music apps use this layout:
@@ -106,7 +112,10 @@ HELP = {  # Shown in the status bar while the mouse is over a control.
     "ts": "Export the take as TypeScript code that rebuilds the sound.",
     "midi": "Export the take as a MIDI file.",
     "lily": "Export the take as sheet music (LilyPond .ly, plus a PDF if LilyPond is installed).",
-    "trim": "Trim: start the take at its first note instead of when you pressed Record.",
+    "trim": "Trim: start the take at its first note. MIDI and Score keep beat 1 and drop only whole bars.",
+    "metronome": "Metronome: a click on every beat, higher on beat 1 (M). Recording always counts in one bar.",
+    "slower": "Slower ([).",
+    "faster": "Faster (]).",
     "down": "Octave down (Z).",
     "up": "Octave up (X).",
 }
@@ -146,6 +155,19 @@ def trim_start(take):
     between pressing Record and playing. Takes a take sorted by start time."""
     first = take[0][0]
     return [(at - first, midi, held, inst) for at, midi, held, inst in take]
+
+
+def bar_seconds(bpm):
+    return BEATS_PER_BAR * 60 / bpm
+
+
+def trim_to_bar(take, bpm):
+    """Like trim_start, but only removes whole bars, so beat 1 stays beat 1 in MIDI and
+    sheet music. A take starts on a downbeat (after the count-in), so its times are
+    already counted in bars. A first note played a little early still counts in its bar."""
+    bar, first = bar_seconds(bpm), take[0][0]
+    shift = min(first, (first + bar / BEATS_PER_BAR / 2) // bar * bar)
+    return [(at - shift, midi, held, inst) for at, midi, held, inst in take]
 
 
 def export_python(take, path):
@@ -201,12 +223,17 @@ s = SimpleNamespace(
     bars=[],  # Bars in the roll: [key, start time, end time or None while held, color]
     take=[],  # The last finished recording: (start, midi, held seconds, instrument)
     recording=[],  # Notes of the recording in progress. Replaces `take` when you press Stop.
-    rec_start=None,  # time.time() when recording started, or None when not recording
+    rec_start=None,  # When recording starts (after the count-in), or None when not recording
+    bpm=DEFAULT_BPM,  # Tempo for the metronome and the next recording.
+    take_bpm=DEFAULT_BPM,  # The tempo the take was recorded at. MIDI and Score use it.
+    metronome=False,  # Whether the click keeps going after the count-in.
+    beat0=time.time(),  # A downbeat that the beat grid and the click count from.
+    click_bpm=DEFAULT_BPM,  # The tempo the click (and the grid) is running at.
     trim=True,  # Start the first note at 0 s when playing back or exporting.
     saved=set(),  # Exports saved from the current take ("wav", "midi", ...), shown checked.
     last=None,  # (midi, seconds held) of the last note, for the readout.
     mouse_key=None,  # The piano key the mouse is holding down, if any.
-    status="Play with the mouse, or the keys A W S E D F T G Y H U J K. Z / X change octave.",
+    status="Play with the mouse, or the keys A W S E D F T G Y H U J K. Z / X change octave, M the metronome.",
     hint=None,  # Help for the control under the mouse, shown in the status bar instead of `status`.
     later=None,  # A slow job to run after the next frame is shown, so its "working" message appears first.
 )
@@ -241,8 +268,10 @@ def note_off(i):
     channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
     bar[2] = time.time()
     s.last = (midi, bar[2] - start)
-    if s.rec_start is not None and start >= s.rec_start:
-        s.recording.append((start - s.rec_start, midi, bar[2] - start, inst))
+    # A note counts if it starts after the count-in, or up to half a beat before it:
+    # players often hit beat 1 a little early. Early notes are moved to 0 s.
+    if s.rec_start is not None and start >= s.rec_start - 30 / s.bpm:
+        s.recording.append((max(0.0, start - s.rec_start), midi, bar[2] - start, inst))
 
 
 def choose(name):
@@ -269,22 +298,64 @@ def shift_octave(by):
     s.status = f"Keys now play {note_name(s.low)} to {note_name(s.low + 12)}."
 
 
+def start_click(loop, new_downbeat, bpm):
+    """Start the click on channel 0: looping when the metronome is on, or a single bar
+    (a count-in). new_downbeat makes now beat 1; otherwise it joins in step with the grid."""
+    now = time.time()
+    if new_downbeat:
+        s.beat0 = now
+    s.click_bpm = bpm
+    bar = synth.metronome_bar(bpm, BEATS_PER_BAR) * 0.6
+    offset = int((now - s.beat0) % bar_seconds(bpm) * synth.SR)  # How far into the bar we are.
+    sound = pygame.sndarray.make_sound(synth.to_int16(np.roll(bar, -offset)))
+    pygame.mixer.Channel(0).play(sound, loops=-1 if loop else 0)
+
+
+def toggle_metronome():
+    s.metronome = not s.metronome
+    if s.metronome:
+        start_click(loop=True, new_downbeat=False, bpm=s.bpm)
+        s.status = f"Metronome on, {s.bpm} BPM."
+    else:
+        pygame.mixer.Channel(0).stop()
+        s.status = "Metronome off. Recording still counts in one bar."
+
+
+def change_tempo(by):
+    if s.rec_start is not None:
+        s.status = "Press Stop before changing the tempo."
+        return
+    s.bpm = min(MAX_BPM, max(MIN_BPM, s.bpm + by))
+    if s.metronome:
+        start_click(loop=True, new_downbeat=True, bpm=s.bpm)
+    else:
+        s.beat0, s.click_bpm = time.time(), s.bpm  # The grid follows the new tempo.
+    s.status = f"Tempo {s.bpm} BPM."
+
+
 def record():
     if s.rec_start is None:
-        s.recording, s.rec_start = [], time.time()
-        s.status = "Recording. Play, then press Stop."
+        start_click(loop=s.metronome, new_downbeat=True, bpm=s.bpm)  # One bar of count-in clicks.
+        s.recording, s.rec_start = [], s.beat0 + bar_seconds(s.bpm)
+        s.status = "Count-in, then recording starts on beat 1. Press Stop when you're done."
         return
     s.rec_start = None
+    if not s.metronome:
+        pygame.mixer.Channel(0).stop()  # In case Stop came during the count-in.
     if s.recording:
-        s.take, s.saved = sorted(s.recording), set()  # Notes are saved when released, so sort by start.
+        s.take, s.saved, s.take_bpm = sorted(s.recording), set(), s.bpm  # Notes are saved when released, so sort by start.
         s.status = f"Recorded {len(s.take)} notes."
     else:  # Record then Stop without playing: you changed your mind, so keep the old take.
         s.status = "Nothing was played, so the previous take is kept."
 
 
-def take_notes():
-    """The take as played or exported: trimmed to start at 0 s when Trim is on. The recording itself is unchanged."""
-    return trim_start(s.take) if s.trim else s.take
+def take_notes(musical=False):
+    """The take as played or exported. With Trim on, it starts at its first note; musical
+    (MIDI, Score, playing along with the metronome) drops only whole bars, so the beats
+    stay where they were played. The recording itself is unchanged."""
+    if not s.trim:
+        return s.take
+    return trim_to_bar(s.take, s.take_bpm) if musical else trim_start(s.take)
 
 
 def play():
@@ -294,7 +365,9 @@ def play():
     if not s.take:
         s.status = "Nothing recorded yet. Press Record first."
         return
-    notes = take_notes()
+    notes = take_notes(musical=s.metronome)
+    if s.metronome:  # Click along at the take's tempo, starting on its beat 1.
+        start_click(loop=True, new_downbeat=True, bpm=s.take_bpm)
     pygame.sndarray.make_sound(synth.to_int16(synth.render(notes))).play()
     # Show the take rising through the roll as it plays. Notes outside the keys on screen aren't drawn.
     t0 = time.time()
@@ -317,7 +390,7 @@ def export(kind):
         s.status = "Nothing recorded yet. Press Record first."
         return
     OUT.mkdir(exist_ok=True)
-    notes, name = take_notes(), stamp()
+    notes, name = take_notes(musical=kind in ("midi", "lily")), stamp()
     if kind == "wav":
         path = OUT / f"{name}.wav"
         synth.save_wav(path, synth.render(notes))
@@ -329,10 +402,10 @@ def export(kind):
         export_typescript(notes, path)
     elif kind == "midi":
         path = OUT / f"{name}.mid"
-        path.write_bytes(notation.midi_bytes(notes, BPM))
+        path.write_bytes(notation.midi_bytes(notes, s.take_bpm))
     else:
         path = OUT / f"{name}.ly"
-        path.write_text(notation.lilypond(notes, BPM, name))
+        path.write_text(notation.lilypond(notes, s.take_bpm, name))
         if not shutil.which("lilypond"):
             s.status = f"Saved {path.relative_to(HERE)}. Install LilyPond (brew install lilypond) to get a PDF."
             s.saved.add(kind)
@@ -370,6 +443,10 @@ def press(action):
         play()
     elif action == "trim":
         toggle_trim()
+    elif action == "metronome":
+        toggle_metronome()
+    elif action in ("slower", "faster"):
+        change_tempo(-BPM_STEP if action == "slower" else BPM_STEP)
     else:
         export(action)
 
@@ -486,11 +563,18 @@ def draw_top():
     ink = button(b, "play", enabled=bool(s.take) and not recording)
     triangle(((b[0] + 15, 26), (b[0] + 15, 38), (b[0] + 25, 32)), ink)
     text((b[0] + 34, 32 - 9), "Play", ink, 15, "bold")
+    # Metronome: its light flashes on each beat while it's on.
+    b = (204, 14, 304, 50)
+    button(b, "metronome")
+    on_beat = (time.time() - s.beat0) % (60 / s.click_bpm) < 0.1
+    light = (INK if on_beat else DIM) if s.metronome else FAINT
+    dpg.draw_circle((b[0] + 14, 32), 3.5, fill=light, color=light, parent="canvas")
+    text((b[0] + 24, 32 - 9), "Metronome", INK if s.metronome else DIM, 15, "bold")
 
     # Family tabs. Each family's color underlines its tab; the current one is filled.
     family_now = family_of(s.instrument)
     for n, (family, color) in enumerate(FAMILY_COLORS.items()):
-        b = (222 + n * 78, 14, 222 + n * 78 + 74, 50)
+        b = (316 + n * 60, 14, 316 + n * 60 + 58, 50)
         on = family == family_now
         button(b, f"family:{family}", fill=LANE if on else PANEL)
         if on:  # The current family's color at full strength; the others are a faint hairline.
@@ -555,12 +639,13 @@ def draw_roll(now):
             box((b[0], top, b[2], bottom), BLACK_LANE)
         elif b[0] > left and i - 1 not in BLACK:  # Only E|F and B|C have no black key between them.
             line((b[0], top), (b[0], bottom), LINE)
-    # The beat grid rises with the notes, so notes played on the beat line up with it.
-    beat = 60 / BPM
-    first = int((now - (bottom - top) / SPEED) / beat) + 1
-    for k in range(first, int(now / beat) + 1):
-        y = bottom - (now - k * beat) * SPEED
-        line((left, y), (right, y), BAR_LINE if k % 4 == 0 else LINE)
+    # The beat grid rises with the notes, in step with the metronome, so notes played on
+    # the beat line up with it. Beat k happened at s.beat0 + k * beat; k = 0, 4, 8... start bars.
+    beat = 60 / s.click_bpm
+    oldest = now - (bottom - top) / SPEED  # The time that has risen to the top of the roll.
+    for k in range(math.ceil((oldest - s.beat0) / beat), math.floor((now - s.beat0) / beat) + 1):
+        y = bottom - (now - s.beat0 - k * beat) * SPEED
+        line((left, y), (right, y), BAR_LINE if k % BEATS_PER_BAR == 0 else LINE)
     # The bars. A bar's top is where the note started and its bottom where it ended,
     # both rising at SPEED. A held note's bottom stays on the keys. White-key bars go
     # first so black-key bars sit on top, and an outline keeps neighbours apart.
@@ -610,7 +695,9 @@ def draw_status(now):
         note = f"{note_name(s.last[0])}  {s.last[1]:.2f} s"
     else:
         note = "–"
-    if s.rec_start is not None:
+    if s.rec_start is not None and now < s.rec_start:
+        take = f"Count-in {math.ceil((s.rec_start - now) * s.bpm / 60)}"
+    elif s.rec_start is not None:
         take = f"Recording {now - s.rec_start:.1f} s, {len(s.recording)} notes"
     elif s.take:
         take = f"Take: {len(s.take)} notes, {s.take[-1][0] + s.take[-1][2] - s.take[0][0]:.1f} s"
@@ -618,9 +705,17 @@ def draw_status(now):
         take = "No take yet"
     # Fixed left edges, so the ticking numbers don't shift the line every frame.
     y = (b[1] + b[3]) / 2 - 14 * 0.62
-    text((W - 400, y), note, INK, 14)
-    text((W - 290, y), take, INK, 14)
-    text_in(b, f"{BPM} BPM", DIM, 14, align="right")
+    text((W - 450, y), note, INK, 14)
+    text((W - 340, y), take, INK, 14)
+    # Tempo: slower, the BPM, faster. Locked while recording.
+    slower, faster = (W - 130, b[1] + 4, W - 106, b[3] - 4), (W - 40, b[1] + 4, W - 16, b[3] - 4)
+    for bb, action in ((slower, "slower"), (faster, "faster")):
+        ink = button(bb, action, enabled=s.rec_start is None)
+        cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+        line((cx - 5, cy), (cx + 5, cy), ink, 2)
+        if action == "faster":
+            line((cx, cy - 5), (cx, cy + 5), ink, 2)
+    text_in((slower[2], b[1], faster[0], b[3]), f"{s.bpm} BPM", INK, 14, "bold")
 
 
 # ---------------------------------------------------------------- setup
@@ -637,12 +732,14 @@ def main():
     pygame.mixer.pre_init(synth.SR, -16, 1, 256, allowedchanges=0)
     pygame.mixer.init()
     pygame.mixer.set_num_channels(32)  # Up to 32 notes at once, including release tails.
+    pygame.mixer.set_reserved(1)  # Channel 0 is kept for the metronome; notes never take it.
     load(s.instrument)
 
     dpg.create_context()
     KEYS.update({getattr(dpg, f"mvKey_{c.upper()}"): i for i, c in enumerate(LETTERS)})
     SHORTCUTS.update({dpg.mvKey_Z: "down", dpg.mvKey_X: "up", dpg.mvKey_Left: "down",
-                      dpg.mvKey_Right: "up", dpg.mvKey_Up: "prev", dpg.mvKey_Down: "next"})
+                      dpg.mvKey_Right: "up", dpg.mvKey_Up: "prev", dpg.mvKey_Down: "next",
+                      dpg.mvKey_M: "metronome", dpg.mvKey_Open_Brace: "slower", dpg.mvKey_Close_Brace: "faster"})
     with dpg.font_registry():
         dpg.add_font(str(FONTS / "BarlowSemiCondensed-Medium.ttf"), FONT_LOAD_SIZE, tag="ui")
         dpg.add_font(str(FONTS / "BarlowSemiCondensed-SemiBold.ttf"), FONT_LOAD_SIZE, tag="bold")

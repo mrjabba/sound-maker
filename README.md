@@ -89,14 +89,14 @@ python app.py
 ```
 
 ```
- [Record] [Play]   Keys Strings Winds Brass Perc   WAV PY TS MID SCORE  [Trim on]
+ [Record] [Play] [Metronome]  Keys Strings Winds Brass Perc  WAV PY TS MID SCORE [Trim on]
  [Piano] Organ Guitar Harp                                   <  C4 - C5  >
  ┌──────────────────────────────────────────────────────────────────────────┐
  │  the roll: each note rises from its key as a colored bar, over a beat     │
- │  grid at BPM (a brighter line every 4 beats)                              │
+ │  grid in step with the metronome (a brighter line on every beat 1)        │
  └──────────────────────────────────────────────────────────────────────────┘
  [ piano keys ............................................................. ]
- status message                                  C4 0.42 s   Take: 12 notes, 3.4 s   100 BPM
+ status message                        C4 0.42 s   Take: 12 notes, 3.4 s   [-] 100 BPM [+]
 ```
 
 - **Play:** click the keys, or type on the computer keyboard. The key letters are printed on the piano keys:
@@ -120,9 +120,12 @@ python app.py
   Switching only changes notes you play after that, so one take can mix instruments. Every key plays every instrument. Use Z / X to move low instruments (tuba, double bass, timpani) into their real range. Snare and cymbals are noise, so the key only changes the drum's thump or how long the crash rings.
 - **Record** starts a new take, and **Stop** (the same button, red while recording) ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
 - **Play** plays the recording back, and its notes rise through the roll as they sound (only notes inside the octave on screen are drawn).
-- **Trim** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
+- **Trim** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. MIDI and SCORE trim differently: they drop only whole bars, so a note you played on beat 2 is still on beat 2 in the score. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
 - **WAV / PY / TS / MID / SCORE** write to `recordings/take-<date>-<time>.*` (SCORE writes the `.ly`, plus a PDF when LilyPond is installed). Each one you've saved from the current take gets a check mark until you record a new take. Exports and Play wait until you press Stop.
-- **Tempo:** MIDI and sheet music need beats, not seconds, so they assume you played at `BPM` (100, set in `app.py`). Play along with a metronome at that speed and the notes land on the beats and bars.
+- **Tempo:** set it with **−** / **+** next to the BPM in the bottom-right corner, or the **[** / **]** keys (5 BPM a step, 40 to 240). The beat grid in the roll follows it. It's locked while recording.
+- **Metronome** (or **M**): a click on every beat, higher on beat 1. Its light flashes on each beat. When it's on, Play also clicks along, at the tempo the take was recorded at. The click never goes into an export.
+- **Count-in:** pressing Record always plays one bar of clicks first (even with the metronome off), and recording starts on beat 1. Notes you hit up to half a beat early still count, and start at 0 s.
+- **The take remembers its tempo.** MIDI and sheet music use the tempo you recorded at, even if you change it afterwards.
 
 The recording is just a list of notes:
 
@@ -211,7 +214,7 @@ a,1 |
 `c'` is middle C, `cis` is C#, `'` and `,` move up and down an octave, the number is the length (4 = quarter, 8. = dotted eighth), `~` ties, `r` is a rest, and `|` is a barline. You can fix notes in the text and run `lilypond` again.
 
 How the take becomes notation (in `notation.py`):
-- Note starts and lengths snap to the nearest 16th note at `BPM`, in 4/4 time.
+- Note starts and lengths snap to the nearest 16th note at the take's tempo, in 4/4 time. Because recording starts on beat 1 after the count-in, the bars line up with what you heard.
 - One staff per instrument, in the order they first play, with that instrument's clef. Piano, organ and harp get two staves, and notes move between them automatically.
 - Notes that start together become a chord. A note still sounding when the next one starts is cut short, so each staff is one line of music.
 - Everything is at concert pitch (clarinet, trumpet, horn and sax parts aren't transposed) and spelled with sharps.
@@ -251,7 +254,7 @@ Run `python synth.py` after any change to check the instruments are still in tun
 
 **The window:** `app.py` paints the whole window every frame from one state object `s`, like a game loop (`draw()`), and every clickable thing it paints is added to `hits`, so a click just looks up what's under the mouse. Colors and positions are constants at the top of the file (`GROUND`, `FAMILY_COLORS`, `ROLL`, `SPEED`, ...).
 
-**Other knobs:** `BPM` in `app.py` sets the tempo for MIDI and sheet music. `STEPS_PER_BEAT` in `notation.py` sets the grid (4 = 16th notes). `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
+**Other knobs:** `DEFAULT_BPM`, `MIN_BPM` / `MAX_BPM` and `BPM_STEP` in `app.py` set the tempo control. `metronome_bar()` in `synth.py` makes the click (change its pitches or length there). `STEPS_PER_BEAT` in `notation.py` sets the grid (4 = 16th notes). `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
 
 ---
 
@@ -260,5 +263,5 @@ Run `python synth.py` after any change to check the instruments are still in tun
 - 13 keys are on screen at a time. Use Z / X to reach other octaves.
 - Each note can sound for at most 8 s (`MAX_HOLD` in `app.py`).
 - The guitar can be up to ~10 cents off pitch on high notes. You'd only notice next to another instrument.
-- Sheet music is only as tidy as the playing: there's no metronome in the app yet, triplets and swing don't fit a 16th-note grid, and overlapping notes on one instrument get cut short. The WAV, `.py` and `.ts` exports keep the exact timing.
+- Sheet music is only as tidy as the playing: triplets and swing don't fit a 16th-note grid, only 4/4 time is supported, and overlapping notes on one instrument get cut short. The WAV, `.py` and `.ts` exports keep the exact timing.
 - These are synthesized sounds, not recordings of real instruments. Real-instrument sounds would need SoundFont playback (for example fluidsynth). That's a bigger change, and code exports would no longer match exactly.
