@@ -1,6 +1,8 @@
 # sound-maker
 
 A small desktop piano for making sounds and short songs for games and other code.
+Every note you play rises from its key as a bar, as tall as you held it, in its
+instrument family's color (a piano roll).
 Play notes with the mouse or keyboard, record them, and then:
 
 - **Save .wav**: a normal audio file, for example for `weird-austin/src/main/resources/audio/`.
@@ -13,11 +15,12 @@ Every sound is made from math in `synth.py`. There are no audio sample files. So
 
 ```
 sound-maker/
-  app.py            the window: piano, instrument grid, record and export
+  app.py            the window (drawn with DearPyGui): piano roll, instruments, record and export
   synth.py          the instruments and the song renderer (no UI, so other scripts can import it)
   notation.py       MIDI and LilyPond (sheet music) exports (no UI either)
   ts/instruments.ts the same instruments in TypeScript, used by .ts exports
-  requirements.txt  the Python packages it needs (numpy, pygame)
+  fonts/            the window's font (Barlow Semi Condensed) and its license (SIL Open Font License)
+  requirements.txt  the Python packages it needs (numpy, pygame, dearpygui)
   recordings/       where saves and exports go (created on first save, ignored by git)
 ```
 
@@ -73,8 +76,9 @@ python app.py
 | Self-check the MIDI / sheet music exports | `python notation.py` (prints `ok`) |
 | Try code interactively | `python` then `>>> import synth` (`exit()` to quit) |
 
-> You don't need tkinter. Your pyenv Pythons weren't built with it, which is why this app
-> uses pygame, a normal pip package that includes everything it needs.
+> You don't need tkinter. Your pyenv Pythons weren't built with it. The window is drawn by
+> DearPyGui and the sound is played by pygame, both normal pip packages.
+> If `pip` says "bad interpreter", the venv was made in a different folder: use `python -m pip`, or start the venv over.
 
 ---
 
@@ -84,15 +88,26 @@ python app.py
 python app.py
 ```
 
+```
+ [Record] [Play]   Keys Strings Winds Brass Perc   WAV PY TS MID SCORE  [Trim on]
+ [Piano] Organ Guitar Harp                                   <  C4 - C5  >
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │  the roll: each note rises from its key as a colored bar, over a beat     │
+ │  grid at BPM (a brighter line every 4 beats)                              │
+ └──────────────────────────────────────────────────────────────────────────┘
+ [ piano keys ............................................................. ]
+ status message                                  C4 0.42 s   Take: 12 notes, 3.4 s   100 BPM
+```
+
 - **Play:** click the keys, or type on the computer keyboard. The key letters are printed on the piano keys:
 
   ```
      W E   T Y U          C# D#    F# G# A#
     A S D F G H J K      C  D  E  F  G  A  B  C
   ```
-- **Octaves:** press **Z** / **X**, or click *Octave down* / *Octave up*, to move the keys down or up an octave (from C1–C2 to C6–C7). The labels on the keys show which octave you're in (C4 is middle C). You can change octave while recording, so one take can cover the whole range.
+- **Octaves:** press **Z** / **X** (or the left / right arrow keys), or click the arrows beside the range (*C4 – C5*), to move the keys down or up an octave (from C1–C2 to C6–C7). The labels on the keys show which octave you're in (C4 is middle C). You can change octave while recording, so one take can cover the whole range.
 - **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Struck and plucked instruments (piano, guitar, harp, percussion) die away on their own, like real ones. Blown and bowed ones (woodwinds, brass, strings, organ) keep sounding as long as you hold the key (up to 8 s).
-- **Instrument buttons:** 21 instruments, one row per family:
+- **Instruments:** click a family tab, then an instrument in the row under it. The up / down arrow keys step through all 21 in order. Each family has its own color, used for its tab, the selected instrument, its bars and the keys it lights:
 
   | Family | Instruments |
   |---|---|
@@ -103,10 +118,10 @@ python app.py
   | Percussion | Timpani, Snare Drum, Cymbals, Xylophone |
 
   Switching only changes notes you play after that, so one take can mix instruments. Every key plays every instrument. Use Z / X to move low instruments (tuba, double bass, timpani) into their real range. Snare and cymbals are noise, so the key only changes the drum's thump or how long the crash rings.
-- **Record** starts a new take, and **Stop** ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
-- **Play take** plays the recording back.
-- **Trim start** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
-- **Save .wav / Export .py / Export .ts / Export .mid / Sheet music .ly** write to `recordings/take-<date>-<time>.*`.
+- **Record** starts a new take, and **Stop** (the same button, red while recording) ends it. Only notes played between them are saved. If you press Record and then Stop without playing anything, the previous take is kept, so you can back out safely.
+- **Play** plays the recording back, and its notes rise through the roll as they sound (only notes inside the octave on screen are drawn).
+- **Trim** (on by default) moves the take so the first note starts at 0 s, which removes the silence between pressing Record and playing. Sound effects then start the moment the game calls them. It changes only playback and exports, never the recording, so you can turn it off and export again with the original timing.
+- **WAV / PY / TS / MID / SCORE** write to `recordings/take-<date>-<time>.*` (SCORE writes the `.ly`, plus a PDF when LilyPond is installed). Each one you've saved from the current take gets a check mark until you record a new take. Exports and Play wait until you press Stop.
 - **Tempo:** MIDI and sheet music need beats, not seconds, so they assume you played at `BPM` (100, set in `app.py`). Play along with a metronome at that speed and the notes land on the beats and bars.
 
 The recording is just a list of notes:
@@ -230,9 +245,11 @@ Vocabulary:
 - **Vibrato:** a small, steady wobble in pitch (about 5 times a second).
 
 **Adding an instrument:** write `def kazoo(freq, seconds): ...` in `synth.py` (often one line using `_partials`) and add it to a family in `FAMILIES`.
-A button appears in that family's row automatically. A row fits 5 buttons.
+It appears in that family's row automatically. A row fits 5 instruments. A new family also needs a color in `FAMILY_COLORS` in `app.py`.
 Also give it a General MIDI program and a clef in `MELODIC` in `notation.py`. `python notation.py` fails until you do. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
 Run `python synth.py` after any change to check the instruments are still in tune and not too loud.
+
+**The window:** `app.py` paints the whole window every frame from one state object `s`, like a game loop (`draw()`), and every clickable thing it paints is added to `hits`, so a click just looks up what's under the mouse. Colors and positions are constants at the top of the file (`GROUND`, `FAMILY_COLORS`, `ROLL`, `SPEED`, ...).
 
 **Other knobs:** `BPM` in `app.py` sets the tempo for MIDI and sheet music. `STEPS_PER_BEAT` in `notation.py` sets the grid (4 = 16th notes). `LOW_NOTE` in `app.py` sets the octave the app starts in, and `LOWEST` / `HIGHEST` set how far Z / X can go. `NOTE_GAIN` and `RELEASE` in `synth.py` set the note volume and the fade-out time.
 
