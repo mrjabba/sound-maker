@@ -90,7 +90,7 @@ python app.py
 
 ```
  [Record] [Play] [Metronome]  Keys Strings Winds Brass Perc  WAV PY TS MID SCORE [Trim on]
- [Piano] Organ Guitar Harp                                   <  C4 - C5  >
+ [Piano] Organ Guitar Harp                          [MIDI]   <  C4 - C5  >
  ┌──────────────────────────────────────────────────────────────────────────┐
  │  the roll: each note rises from its key as a colored bar, over a beat     │
  │  grid in step with the metronome (a brighter line on every beat 1)        │
@@ -105,6 +105,7 @@ python app.py
      W E   T Y U          C# D#    F# G# A#
     A S D F G H J K      C  D  E  F  G  A  B  C
   ```
+- **MIDI keyboard:** plug one in and it's connected when the app starts (the **MIDI** light is on). It plays alongside the computer keyboard and mouse, across its whole range, and records like any other key. Notes outside the 13 keys on screen sound and record but don't draw a bar. Click **MIDI** to disconnect it, or to connect one you plugged in after launch.
 - **Octaves:** press **Z** / **X** (or the left / right arrow keys), or click the arrows beside the range (*C4 – C5*), to move the keys down or up an octave (from C1–C2 to C6–C7). The labels on the keys show which octave you're in (C4 is middle C). You can change octave while recording, so one take can cover the whole range.
 - **Hold** a key to make the note longer. Releasing it fades the note out over 0.15 s. Struck and plucked instruments (piano, guitar, harp, percussion) die away on their own, like real ones. Blown and bowed ones (woodwinds, brass, strings, organ) keep sounding as long as you hold the key (up to 8 s).
 - **Instruments:** click a family tab, then an instrument in the row under it. The up / down arrow keys step through all 21 in order. Each family has its own color, used for its tab, the selected instrument, its bars and the keys it lights:

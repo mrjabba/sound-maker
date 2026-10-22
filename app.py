@@ -23,6 +23,9 @@ How it works:
   Export .mid and Score (.ly) come from notation.py at that tempo.
 * The metronome is one bar of clicks (synth.metronome_bar) looped on its own mixer
   channel, so its timing is exact instead of depending on the frame rate.
+* A MIDI keyboard (pygame.midi) is connected at startup if one is plugged in, and the
+  MIDI button connects or disconnects it. It plays every key it has, not just the 13
+  on screen; notes outside them sound and record but aren't drawn.
 """
 import math
 import shutil
@@ -35,6 +38,7 @@ from types import SimpleNamespace
 import dearpygui.dearpygui as dpg
 import numpy as np
 import pygame
+import pygame.midi
 
 import notation
 import synth
@@ -116,6 +120,7 @@ HELP = {  # Shown in the status bar while the mouse is over a control.
     "metronome": "Metronome: a click on every beat, higher on beat 1 (M). Recording always counts in one bar.",
     "slower": "Slower ([).",
     "faster": "Faster (]).",
+    "midi_in": "MIDI keyboard: connect (finds one plugged in after launch) or disconnect.",
     "down": "Octave down (Z).",
     "up": "Octave up (X).",
 }
@@ -219,7 +224,8 @@ export const {path.stem.replace('-', '_')}Sound = (): Uint8Array => renderWav(NO
 s = SimpleNamespace(
     instrument="piano",
     low=LOW_NOTE,  # MIDI note of the leftmost key. The octave buttons move it by 12.
-    held={},  # key (0-12) -> (midi, channel, start time, instrument, bar), for keys currently down
+    held={},  # key -> (midi, channel, start time, instrument, bar), for keys currently down.
+    # A key is 0-12 for the keys on screen, or ("midi", note) for the MIDI keyboard.
     bars=[],  # Bars in the roll: [key, start time, end time or None while held, color]
     take=[],  # The last finished recording: (start, midi, held seconds, instrument)
     recording=[],  # Notes of the recording in progress. Replaces `take` when you press Stop.
@@ -235,36 +241,45 @@ s = SimpleNamespace(
     mouse_key=None,  # The piano key the mouse is holding down, if any.
     status="Play with the mouse, or the keys A W S E D F T G Y H U J K. Z / X change octave, M the metronome.",
     hint=None,  # Help for the control under the mouse, shown in the status bar instead of `status`.
+    midi_in=None,  # The MIDI keyboard's pygame.midi.Input, or None when not connected.
     later=None,  # A slow job to run after the next frame is shown, so its "working" message appears first.
 )
 sounds = {}  # (instrument, midi) -> pygame Sound
 hits = []  # (box, action) for everything clickable in the last frame
 
 
+def sound(name, midi):
+    """One note as a pygame Sound, rendered the first time it's asked for and then cached."""
+    if (name, midi) not in sounds:
+        wave = synth.INSTRUMENTS[name](synth.hz(midi), MAX_HOLD) * synth.NOTE_GAIN
+        sounds[name, midi] = pygame.sndarray.make_sound(synth.to_int16(wave))
+    return sounds[name, midi]
+
+
 def load(name):
-    """Render the 13 notes of an instrument in the current octave and cache them as
-    pygame Sounds. Octaves you've already visited are cached, so going back is instant."""
+    """Render the 13 notes of an instrument in the current octave. Octaves you've already
+    visited are cached, so going back is instant."""
     for i in range(13):
-        midi = s.low + i
-        if (name, midi) not in sounds:
-            wave = synth.INSTRUMENTS[name](synth.hz(midi), MAX_HOLD) * synth.NOTE_GAIN
-            sounds[name, midi] = pygame.sndarray.make_sound(synth.to_int16(wave))
+        sound(name, s.low + i)
 
 
-def note_on(i):
-    if i not in s.held:  # Key-press events repeat while a key is held; only start the note once.
-        midi, now = s.low + i, time.time()
-        bar = [i, now, None, FAMILY_COLORS[family_of(s.instrument)]]
-        s.bars.append(bar)
-        s.held[i] = (midi, sounds[s.instrument, midi].play(), now, s.instrument, bar)
+def note_on(key, midi):
+    if key not in s.held:  # Key-press events repeat while a key is held; only start the note once.
+        now = time.time()
+        # ponytail: a MIDI note outside the cached octave renders on first press (~10 ms hitch).
+        channel = sound(s.instrument, midi).play()
+        bar = [midi - s.low, now, None, FAMILY_COLORS[family_of(s.instrument)]]
+        if 0 <= midi - s.low <= 12:  # Only notes on the keys on screen get a bar.
+            s.bars.append(bar)
+        s.held[key] = (midi, channel, now, s.instrument, bar)
 
 
-def note_off(i):
+def note_off(key):
     # Held notes are stored by key, along with their midi number. If you change octave
     # while holding a key, releasing it still stops the note that's actually playing.
-    if i not in s.held:
+    if key not in s.held:
         return
-    midi, channel, start, inst, bar = s.held.pop(i)
+    midi, channel, start, inst, bar = s.held.pop(key)
     channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
     bar[2] = time.time()
     s.last = (midi, bar[2] - start)
@@ -296,6 +311,37 @@ def shift_octave(by):
     s.low = min(HIGHEST, max(LOWEST, s.low + 12 * by))
     load(s.instrument)
     s.status = f"Keys now play {note_name(s.low)} to {note_name(s.low + 12)}."
+
+
+def toggle_midi():
+    """Disconnect the MIDI keyboard, or look for one and connect it."""
+    if s.midi_in:
+        for key in [k for k in s.held if isinstance(k, tuple)]:
+            note_off(key)  # Don't leave its notes hanging.
+        s.midi_in.close()
+        s.midi_in, s.status = None, "MIDI keyboard disconnected."
+        return
+    pygame.midi.quit()  # pygame.midi only lists devices at init, so start over to see new ones.
+    pygame.midi.init()
+    device = pygame.midi.get_default_input_id()
+    if device < 0:
+        s.status = "No MIDI keyboard found. Plug one in and press MIDI."
+        return
+    s.midi_in = pygame.midi.Input(device)
+    s.status = f"MIDI keyboard: {pygame.midi.get_device_info(device)[1].decode()}."
+
+
+def read_midi():
+    """Play the notes the MIDI keyboard sent since the last frame. Other messages
+    (clock, knobs, pedals) are ignored."""
+    # ponytail: read once a frame, so up to ~16 ms of extra delay. A thread could cut it.
+    while s.midi_in and s.midi_in.poll():
+        for (status, note, velocity, _), _ in s.midi_in.read(64):
+            kind = status & 0xF0
+            if kind == 0x90 and velocity:  # Note on.
+                note_on(("midi", note), note)
+            elif kind in (0x80, 0x90):  # Note off, or note on with velocity 0 (which means off).
+                note_off(("midi", note))
 
 
 def start_click(loop, new_downbeat, bpm):
@@ -443,6 +489,8 @@ def press(action):
         play()
     elif action == "trim":
         toggle_trim()
+    elif action == "midi_in":
+        toggle_midi()
     elif action == "metronome":
         toggle_metronome()
     elif action in ("slower", "faster"):
@@ -454,7 +502,7 @@ def press(action):
 # ---------------------------------------------------------------- input
 def on_key_down(_, key):
     if key in KEYS:
-        note_on(KEYS[key])
+        note_on(KEYS[key], s.low + KEYS[key])
     elif key in SHORTCUTS:
         press(SHORTCUTS[key])
 
@@ -469,7 +517,7 @@ def on_mouse_down():
     for i in sorted(KEY_BOXES, key=lambda i: i not in BLACK):  # Black keys are on top, so check them first.
         if inside(KEY_BOXES[i], pos):
             s.mouse_key = i
-            note_on(i)
+            note_on(i, s.low + i)
             return
     for box, action in hits:
         if inside(box, pos):
@@ -621,6 +669,12 @@ def draw_row():
         else:
             button(b, f"inst:{name}", fill=GROUND)
             text_in(b, pretty(name), DIM, 15, "bold")
+    # MIDI: its light is on while a MIDI keyboard is connected.
+    b = (W - 300, ROW[1] + 8, W - 208, ROW[3] - 6)
+    button(b, "midi_in", fill=GROUND)
+    light = INK if s.midi_in else FAINT
+    dpg.draw_circle((b[0] + 14, (b[1] + b[3]) / 2), 3.5, fill=light, color=light, parent="canvas")
+    text((b[0] + 24, (b[1] + b[3]) / 2 - 9), "MIDI", INK if s.midi_in else DIM, 15, "bold")
     # Octave: down, the range the keys play, up.
     down, up = (W - 196, ROW[1] + 8, W - 164, ROW[3] - 6), (W - 48, ROW[1] + 8, W - 16, ROW[3] - 6)
     for b, action, sign in ((down, "down", -1), (up, "up", 1)):
@@ -734,6 +788,9 @@ def main():
     pygame.mixer.set_num_channels(32)  # Up to 32 notes at once, including release tails.
     pygame.mixer.set_reserved(1)  # Channel 0 is kept for the metronome; notes never take it.
     load(s.instrument)
+    pygame.midi.init()
+    if pygame.midi.get_default_input_id() >= 0:
+        toggle_midi()
 
     dpg.create_context()
     KEYS.update({getattr(dpg, f"mvKey_{c.upper()}"): i for i, c in enumerate(LETTERS)})
@@ -761,11 +818,14 @@ def main():
     dpg.show_viewport()
     dpg.set_primary_window("main", True)
     while dpg.is_dearpygui_running():
+        read_midi()
         draw()
         dpg.render_dearpygui_frame()
         if s.later:  # A slow job whose "working" message is now on screen.
             job, s.later = s.later, None
             job()
+    if s.midi_in:
+        s.midi_in.close()
     dpg.destroy_context()
 
 
