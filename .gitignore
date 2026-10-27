@@ -1,3 +1,8 @@
 .venv/
 __pycache__/
 recordings/
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store

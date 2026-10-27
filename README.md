@@ -3,6 +3,9 @@
 A small desktop piano for making sounds and short songs for games and other code.
 Every note you play rises from its key as a bar, as tall as you held it, in its
 instrument family's color (a piano roll).
+
+![sound-maker window](assets/sound-maker-gui.png)
+
 Play notes with the mouse or keyboard, record them, and then:
 
 - **Save .wav**: a normal audio file, for example for `weird-austin/src/main/resources/audio/`.
