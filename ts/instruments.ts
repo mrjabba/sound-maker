@@ -4,7 +4,7 @@
 //   import { renderWav, type Note } from './instruments'
 //   const bytes = renderWav([{ at: 0, midi: 60, held: 0.5, instrument: 'piano' }])
 //
-// Built in the same style as sound-samples.ts: an instrument is
+// An instrument is
 // (freq, seconds) => number[] of samples, and renderWav() returns WAV file bytes.
 // If you change an instrument in synth.py, make the same change here.
 // The noise in guitar, harp, flute, snare and cymbals comes from a different random generator than in
@@ -184,7 +184,7 @@ export function render(notes: Note[]): number[] {
   return peak > 0.99 ? out.map(v => (v * 0.99) / peak) : out // only turn it down, and only if it would clip
 }
 
-// Samples -> 16-bit mono WAV file bytes. Same format as pcm() in sound-samples.ts.
+// Samples -> 16-bit mono WAV file bytes.
 export function wav(samples: number[]): Uint8Array {
   const out = new DataView(new ArrayBuffer(44 + samples.length * 2))
   const text = (at: number, s: string) => [...s].forEach((c, i) => out.setUint8(at + i, c.charCodeAt(0)))

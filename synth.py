@@ -2,7 +2,7 @@
 synth.py: every sound in sound-maker is made from math here. There are no audio samples.
 
 This file has no UI and no pygame, so other scripts can import it, for example
-a copy of gen_audio.py or a file the app exported:
+a game's asset script or a file the app exported:
 
     from synth import render, save_wav
     notes = [(0.0, 60, 0.5, "piano"), (0.5, 64, 0.5, "flute")]
@@ -12,9 +12,8 @@ Two ideas to know:
 
 * A sound is a numpy array of floats between -1 and 1, one per sample.
   SR (sample rate) samples make up one second of sound.
-* An instrument is a function  fn(freq_hz, seconds) -> array.  This is the same
-  shape as the `fn` that gen_audio.py's voice() takes, so the instruments can be
-  copied between the two files.
+* An instrument is a function  fn(freq_hz, seconds) -> array.  This
+  simple shape makes the instruments easy to call from other code.
 
 Run `python synth.py` to run the self-check at the bottom.
 """
@@ -22,7 +21,7 @@ import wave
 
 import numpy as np
 
-SR = 22050          # Samples per second. 22050 is the rate weird-austin and sound-samples.ts use.
+SR = 22050          # Samples per second. 22050 is plenty for game sounds and keeps files small.
 NOTE_GAIN = 0.3     # Volume of one note. Kept below 1 so a chord of 3 or 4 notes doesn't clip.
 RELEASE = 0.15      # Seconds a note takes to fade out after you let go of its key.
 

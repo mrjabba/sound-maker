@@ -8,9 +8,9 @@ instrument family's color (a piano roll).
 
 Play notes with the mouse or keyboard, record them, and then:
 
-- **Save .wav**: a normal audio file, for example for `weird-austin/src/main/resources/audio/`.
-- **Export .py**: a Python file holding the note list. Run it to rebuild the WAV, edit the notes, or paste them into `gen_audio.py`.
-- **Export .ts**: a TypeScript module that builds the same sound in memory, like `sound-samples.ts`.
+- **Save .wav**: a normal audio file, ready to drop into a game's assets.
+- **Export .py**: a Python file holding the note list. Run it to rebuild the WAV, edit the notes, or paste them into your own Python code.
+- **Export .ts**: a TypeScript module that builds the same sound in memory, with no audio files.
 - **Export .mid**: a standard MIDI file for MuseScore, GarageBand, Logic, or a game engine.
 - **Sheet music .ly**: a LilyPond score (plain text), engraved as a PDF if LilyPond is installed.
 
@@ -23,6 +23,7 @@ sound-maker/
   notation.py       MIDI and LilyPond (sheet music) exports (no UI either)
   ts/instruments.ts the same instruments in TypeScript, used by .ts exports
   fonts/            the window's font (Barlow Semi Condensed) and its license (SIL Open Font License)
+  test_sound_maker.py  the tests (python -m unittest)
   requirements.txt  the Python packages it needs (numpy, pygame, dearpygui)
   recordings/       where saves and exports go (created on first save, ignored by git)
 ```
@@ -152,30 +153,26 @@ source .venv/bin/activate
 python recordings/take_20261014_090513.py    # writes take_20261014_090513.wav next to it
 ```
 
-The exported file imports `synth.py` from this folder (its path is written into the file).
+The exported file imports `synth.py` from the folder above it, so keep it in `recordings/` (or copy `synth.py` next to its parent folder).
 
-### b) In weird-austin's `gen_audio.py`
+### b) In your own Python project
 
-`gen_audio.py` also works at 22050 Hz with numpy, and its `save(name, make)` takes a function that returns samples. So:
+`synth.py` needs only numpy, so you can copy it into any project:
 
-1. Copy `synth.py` into `weird-austin/tools/`.
-2. In `gen_audio.py`:
+```python
+from synth import render, save_wav
 
-   ```python
-   from synth import render
+MY_JINGLE = [            # pasted from an exported .py
+    (0.000, 60, 0.231, "piano"),
+    (0.250, 64, 0.231, "piano"),
+]
 
-   MY_JINGLE = [            # pasted from an exported .py
-       (0.000, 60, 0.231, "piano"),
-       (0.250, 64, 0.231, "piano"),
-   ]
+save_wav("jingle.wav", render(MY_JINGLE))
+```
 
-   save("jingle", lambda: render(MY_JINGLE))   # -> src/main/resources/audio/jingle.wav
-   ```
+Each instrument is a plain `fn(freq, seconds) -> array` at 22050 Hz, so you can also call one directly: `synth.flute(440, 0.5)`.
 
-The instruments use the same `fn(freq, seconds)` signature as `gen_audio.py`'s `voice()`, so you can also use them directly:
-`voice(buf, melody, beat, 0, synth.flute, 0.3)`.
-
-### c) In TypeScript (like `sound-samples.ts`)
+### c) In TypeScript
 
 1. Copy `ts/instruments.ts` next to the exported `take-....ts`.
 2. Use it:
@@ -195,7 +192,7 @@ The instruments use the same `fn(freq, seconds)` signature as `gen_audio.py`'s `
    ])
    ```
 
-The bytes are a complete 16-bit mono WAV, the same format as `pcm()` in `sound-samples.ts`.
+The bytes are a complete 16-bit mono WAV.
 In a browser you can play them with `new Audio(URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }))).play()`.
 Recent Node can run `.ts` files directly (`node file.ts`). In that case write the import as `'./instruments.ts'`.
 
@@ -254,7 +251,7 @@ Vocabulary:
 **Adding an instrument:** write `def kazoo(freq, seconds): ...` in `synth.py` (often one line using `_partials`) and add it to a family in `FAMILIES`.
 It appears in that family's row automatically. A row fits 5 instruments. A new family also needs a color in `FAMILY_COLORS` in `app.py`.
 Also give it a General MIDI program and a clef in `MELODIC` in `notation.py`. `python notation.py` fails until you do. To use it from `.ts` exports too, port it into `ts/instruments.ts`.
-Run `python synth.py` after any change to check the instruments are still in tune and not too loud.
+Run `python synth.py` after any change to check the instruments are still in tune and not too loud, and `python -m unittest` to run all the tests.
 
 **The window:** `app.py` paints the whole window every frame from one state object `s`, like a game loop (`draw()`), and every clickable thing it paints is added to `hits`, so a click just looks up what's under the mouse. Colors and positions are constants at the top of the file (`GROUND`, `FAMILY_COLORS`, `ROLL`, `SPEED`, ...).
 

@@ -107,6 +107,7 @@ ROLL = (16, ROW[3], W - 16, KEYS_TOP)  # The roll sits directly above the keys.
 WHITE_W = (ROLL[2] - ROLL[0]) / 8
 BLACK_W, BLACK_H = WHITE_W * 0.6, 94
 SPEED = 120  # How fast bars rise, in pixels per second.
+LILYPOND_TIMEOUT = 60  # Seconds. The window is frozen while LilyPond runs, so don't wait forever.
 EXPORTS = {"wav": "WAV", "py": "PY", "ts": "TS", "midi": "MID", "lily": "SCORE"}
 HELP = {  # Shown in the status bar while the mouse is over a control.
     "record": "Record a new take. Press again to stop.",
@@ -188,7 +189,7 @@ Run this file (with the sound-maker venv active) to write {path.stem}.wav next t
 import sys
 from pathlib import Path
 
-sys.path.insert(0, {str(HERE)!r})  # Folder that holds synth.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # sound-maker/, which holds synth.py (this file is in sound-maker/recordings/)
 from synth import render, save_wav
 
 NOTES = [
@@ -215,7 +216,7 @@ export const NOTES: Note[] = [
 {rows}
 ]
 
-// The song as WAV file bytes, built in memory (same format as sound-samples.ts).
+// The song as WAV file bytes (16-bit mono), built in memory.
 export const {path.stem.replace('-', '_')}Sound = (): Uint8Array => renderWav(NOTES)
 """)
 
@@ -280,8 +281,9 @@ def note_off(key):
     if key not in s.held:
         return
     midi, channel, start, inst, bar = s.held.pop(key)
-    channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
     bar[2] = time.time()
+    if channel:  # None when all 32 mixer channels were busy and the note never sounded.
+        channel.fadeout(int(synth.RELEASE * 1000))  # Same fade-out that synth.render() applies.
     s.last = (midi, bar[2] - start)
     # A note counts if it starts after the count-in, or up to half a beat before it:
     # players often hit beat 1 a little early. Early notes are moved to 0 s.
@@ -313,13 +315,23 @@ def shift_octave(by):
     s.status = f"Keys now play {note_name(s.low)} to {note_name(s.low + 12)}."
 
 
+MIDI_ERRORS = (pygame.midi.MidiException, OSError)
+
+
+def disconnect_midi(why="MIDI keyboard disconnected."):
+    for key in [k for k in s.held if isinstance(k, tuple)]:
+        note_off(key)  # Don't leave its notes hanging.
+    try:
+        s.midi_in.close()
+    except MIDI_ERRORS:
+        pass  # Already gone (unplugged).
+    s.midi_in, s.status = None, why
+
+
 def toggle_midi():
     """Disconnect the MIDI keyboard, or look for one and connect it."""
     if s.midi_in:
-        for key in [k for k in s.held if isinstance(k, tuple)]:
-            note_off(key)  # Don't leave its notes hanging.
-        s.midi_in.close()
-        s.midi_in, s.status = None, "MIDI keyboard disconnected."
+        disconnect_midi()
         return
     pygame.midi.quit()  # pygame.midi only lists devices at init, so start over to see new ones.
     pygame.midi.init()
@@ -327,7 +339,11 @@ def toggle_midi():
     if device < 0:
         s.status = "No MIDI keyboard found. Plug one in and press MIDI."
         return
-    s.midi_in = pygame.midi.Input(device)
+    try:
+        s.midi_in = pygame.midi.Input(device)
+    except MIDI_ERRORS as e:  # For example, another app is using it.
+        s.status = f"Couldn't open the MIDI keyboard: {e}"
+        return
     s.status = f"MIDI keyboard: {pygame.midi.get_device_info(device)[1].decode()}."
 
 
@@ -335,13 +351,16 @@ def read_midi():
     """Play the notes the MIDI keyboard sent since the last frame. Other messages
     (clock, knobs, pedals) are ignored."""
     # ponytail: read once a frame, so up to ~16 ms of extra delay. A thread could cut it.
-    while s.midi_in and s.midi_in.poll():
-        for (status, note, velocity, _), _ in s.midi_in.read(64):
-            kind = status & 0xF0
-            if kind == 0x90 and velocity:  # Note on.
-                note_on(("midi", note), note)
-            elif kind in (0x80, 0x90):  # Note off, or note on with velocity 0 (which means off).
-                note_off(("midi", note))
+    try:
+        while s.midi_in and s.midi_in.poll():
+            for (status, note, velocity, _), _ in s.midi_in.read(64):
+                kind = status & 0xF0
+                if kind == 0x90 and velocity:  # Note on.
+                    note_on(("midi", note), note)
+                elif kind in (0x80, 0x90):  # Note off, or note on with velocity 0 (which means off).
+                    note_off(("midi", note))
+    except MIDI_ERRORS:
+        disconnect_midi("MIDI keyboard disconnected (unplugged?). Press MIDI to reconnect.")
 
 
 def start_click(loop, new_downbeat, bpm):
@@ -435,6 +454,13 @@ def export(kind):
     if not s.take:
         s.status = "Nothing recorded yet. Press Record first."
         return
+    try:
+        save(kind)
+    except OSError as e:  # Disk full, folder not writable, ...
+        s.status = f"Couldn't save: {e}"
+
+
+def save(kind):
     OUT.mkdir(exist_ok=True)
     notes, name = take_notes(musical=kind in ("midi", "lily")), stamp()
     if kind == "wav":
@@ -465,9 +491,15 @@ def export(kind):
 
 def engrave(path):
     """Run LilyPond to turn the .ly into a PDF next to it. -o names the PDF after the .ly."""
-    done = subprocess.run(["lilypond", "-o", str(path.with_suffix("")), str(path)], capture_output=True, text=True)
+    try:
+        done = subprocess.run(["lilypond", "-o", str(path.with_suffix("")), str(path)],
+                              capture_output=True, text=True, timeout=LILYPOND_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        s.status = f"LilyPond took over {LILYPOND_TIMEOUT:g} s, so it was stopped. The .ly is saved."
+        return
     if done.returncode:
-        s.status = "LilyPond failed: " + done.stderr.strip().splitlines()[-1]
+        last_line = (done.stderr.strip().splitlines() or [f"exit code {done.returncode}"])[-1]
+        s.status = "LilyPond failed: " + last_line
         return
     s.saved.add("lily")
     s.status = f"Saved {path.relative_to(HERE)} and its .pdf"
@@ -793,6 +825,9 @@ def main():
         toggle_midi()
 
     dpg.create_context()
+    # Run input callbacks on this thread, from the loop below. By default DearPyGui runs
+    # them on its own thread, racing draw() and read_midi() over `s`.
+    dpg.configure_app(manual_callback_management=True)
     KEYS.update({getattr(dpg, f"mvKey_{c.upper()}"): i for i, c in enumerate(LETTERS)})
     SHORTCUTS.update({dpg.mvKey_Z: "down", dpg.mvKey_X: "up", dpg.mvKey_Left: "down",
                       dpg.mvKey_Right: "up", dpg.mvKey_Up: "prev", dpg.mvKey_Down: "next",
@@ -818,6 +853,7 @@ def main():
     dpg.show_viewport()
     dpg.set_primary_window("main", True)
     while dpg.is_dearpygui_running():
+        dpg.run_callbacks(dpg.get_callback_queue())
         read_midi()
         draw()
         dpg.render_dearpygui_frame()
